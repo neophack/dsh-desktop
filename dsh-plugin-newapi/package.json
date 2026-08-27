@@ -40,12 +40,12 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-api-remotes": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-client-connection": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-client-locale": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-client-runtime": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-client-ui-settings": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-client-ui-sidebar": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-client-locale": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-api-remotes": "^0.1.1-rc.2"
+    "@deepseek-ai/dsh-client-ui-sidebar": "^0.1.1-rc.2"
   },
   "devDependencies": {
     "esbuild": "^0.25.0"
@@ -61,7 +61,7 @@
   ],
   "scripts": {
     "build": "node build.mjs",
-    "test": "node test/smoke.mjs && node test/client-shape.mjs && node test/login-flow.mjs",
+    "test": "node test/smoke.mjs && node test/client-shape.mjs && node test/login-flow.mjs && node test/snapshot-cache.mjs",
     "prepublishOnly": "node build.mjs"
   },
   "keywords": [

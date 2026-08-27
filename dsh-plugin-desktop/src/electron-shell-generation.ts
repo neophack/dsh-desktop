@@ -133,6 +133,18 @@ function isZoomShortcut(input: Electron.Input): 'in' | 'out' | 'reset' | undefin
   return undefined
 }
 
+/**
+ * F12 (any platform) or Ctrl/Cmd+Shift+I toggles Developer Tools even when no
+ * native application menu is installed to carry the default accelerator —
+ * Windows never gets `macApplicationMenuTemplate`, so without this the
+ * renderer has no way to open DevTools at all.
+ */
+function isDevToolsShortcut(input: Electron.Input): boolean {
+  if (input.type !== 'keyDown') return false
+  if (input.key === 'F12') return true
+  return (input.control || input.meta) && input.shift && input.key.toLowerCase() === 'i'
+}
+
 export interface ElectronShellGenerationOptions {
   readonly platform: ElectronPlatformStrategy
   readonly spec: DesktopShellSpec
@@ -324,6 +336,11 @@ export class ElectronShellGeneration {
       const step = action === 'in' ? 1 : -1
       window.webContents.setZoomLevel(clampedZoomLevel(window.webContents.getZoomLevel() + step))
     }
+    const handleDevToolsShortcut = (event: Electron.Event, input: Electron.Input): void => {
+      if (!isDevToolsShortcut(input)) return
+      event.preventDefault()
+      this.toggleDeveloperTools()
+    }
     const navigate = (event: Electron.Event<Electron.WebContentsWillFrameNavigateEventParams>): void => {
       if (!event.isMainFrame) return
       let targetOrigin: string | undefined
@@ -377,6 +394,7 @@ export class ElectronShellGeneration {
     window.on('resize', scheduleWindowStateWrite)
     window.on('page-title-updated', preserveBlankTitle)
     window.webContents.on('before-input-event', handleZoomShortcut)
+    window.webContents.on('before-input-event', handleDevToolsShortcut)
     window.webContents.on('will-frame-navigate', navigate)
     window.webContents.on('will-redirect', redirect)
     window.webContents.on('render-process-gone', rendererGone)
@@ -408,6 +426,7 @@ export class ElectronShellGeneration {
       window.off('ready-to-show', revealStartupSurface)
       cleanupFullscreenTransition()
       window.webContents.off('before-input-event', handleZoomShortcut)
+      window.webContents.off('before-input-event', handleDevToolsShortcut)
       window.webContents.off('will-frame-navigate', navigate)
       window.webContents.off('will-redirect', redirect)
       window.webContents.off('render-process-gone', rendererGone)

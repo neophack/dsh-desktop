@@ -53,6 +53,17 @@ function formatDate(seconds) {
   if (seconds === void 0 || seconds <= 0) return "--";
   return new Date(seconds * 1e3).toLocaleDateString();
 }
+function formatCachedAt(ms) {
+  if (ms === void 0) return "--";
+  return new Date(ms).toLocaleString();
+}
+function StaleNote(props) {
+  if (props.snapshot?.stale !== true) return null;
+  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { style: { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--dsw-alias-label-tertiary, inherit)" }, children: [
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.StateDot, { state: "warning" }),
+    props.t("staleCache", { time: formatCachedAt(props.snapshot.cachedAt) })
+  ] });
+}
 var inject = ["slots", "locale", "connection"];
 var FOOTER_STYLE_TAG = "dsh-plugin-newapi/sidebar-footer-row";
 function injectFooterRowStyle() {
@@ -189,13 +200,17 @@ var zh = {
   limitSaved: "\u5DF2\u4FDD\u5B58 {model} \u7684\u9650\u5236\u5E76\u91CD\u65B0\u540C\u6B65",
   defaultLimitDisplay: "\u9ED8\u8BA4 {window}",
   failure: "\u64CD\u4F5C\u5931\u8D25",
+  staleCache: "\u7F51\u7EDC\u4E0D\u53EF\u7528\u6216\u670D\u52A1\u5668\u65E0\u6CD5\u8FDE\u63A5, \u6B63\u5728\u663E\u793A\u7F13\u5B58\u6570\u636E (\u66F4\u65B0\u4E8E {time})",
   // Popup-only copy.
   popupOpenSettings: "\u5B8C\u6574\u8BBE\u7F6E",
   popupUsageTitle: "\u5957\u9910\u7528\u91CF",
   popupTokenUsage: "\u5BC6\u94A5\u7528\u91CF",
   popupRequests: "{count} \u6B21\u8BF7\u6C42",
   popupServer: "\u670D\u52A1\u5668",
-  popupSignedInAs: "\u5DF2\u767B\u5F55"
+  popupSignedInAs: "\u5DF2\u767B\u5F55",
+  // Init key-setup dialog copy.
+  initTitle: "\u8BBE\u7F6E NewAPI",
+  initHint: "\u5C1A\u672A\u914D\u7F6E NewAPI \u5BC6\u94A5, \u5BF9\u8BDD\u4E2D\u7684 NewAPI \u6A21\u578B\u6682\u4E0D\u53EF\u89C1\u3002\u5B8C\u6210\u767B\u5F55\u540E\u63D2\u4EF6\u4F1A\u81EA\u52A8\u83B7\u53D6/\u521B\u5EFA\u5BC6\u94A5\u5E76\u540C\u6B65\u6A21\u578B, \u672C\u5F39\u7A97\u968F\u4E4B\u81EA\u52A8\u5173\u95ED\u3002"
 };
 var en = {
   nav: "NewAPI",
@@ -282,13 +297,17 @@ var en = {
   limitSaved: "Saved limits for {model} and re-synced",
   defaultLimitDisplay: "default {window}",
   failure: "Operation failed",
+  staleCache: "Network unavailable or server unreachable \u2014 showing cached data (updated {time})",
   // Popup-only copy.
   popupOpenSettings: "All settings",
   popupUsageTitle: "Plan usage",
   popupTokenUsage: "Key usage",
   popupRequests: "{count} requests",
   popupServer: "Server",
-  popupSignedInAs: "Signed in"
+  popupSignedInAs: "Signed in",
+  // Init key-setup dialog copy.
+  initTitle: "Set up NewAPI",
+  initHint: "No NewAPI credential yet, so the NewAPI models stay hidden in the chat selector. Finish the sign-in and the plugin captures/creates the key and syncs the models automatically \u2014 this dialog then closes by itself."
 };
 var cardStyle = {
   display: "flex",
@@ -348,17 +367,42 @@ function NewApiFooterButton(props) {
   const { wide, call, t } = props;
   const [open, setOpen] = (0, import_react.useState)(false);
   const [userName, setUserName] = (0, import_react.useState)(void 0);
+  const [initOpen, setInitOpen] = (0, import_react.useState)(false);
   const refreshUser = async () => {
     if (call === void 0) return;
     const result = await call("user.get");
     setUserName(result.ok && result.value !== void 0 ? [result.value.display_name, result.value.username].find((s) => typeof s === "string" && s !== "") ?? String(result.value.id) : void 0);
   };
+  const isConfigured = async () => {
+    if (call === void 0) return true;
+    const result = await call("config.get");
+    return result.ok && result.value.tokenConfigured && result.value.apiKeyConfigured;
+  };
   (0, import_react.useEffect)(() => {
-    void refreshUser();
+    void (async () => {
+      await refreshUser();
+      if (await isConfigured()) return;
+      setInitOpen(true);
+    })();
   }, []);
+  (0, import_react.useEffect)(() => {
+    if (!initOpen || call === void 0) return;
+    const timer = setInterval(() => {
+      void (async () => {
+        if (await isConfigured()) setInitOpen(false);
+      })();
+    }, 3e3);
+    return () => {
+      clearInterval(timer);
+    };
+  }, [initOpen]);
   if (call === void 0 || t === void 0) return null;
   const close = () => {
     setOpen(false);
+    void refreshUser();
+  };
+  const closeInit = () => {
+    setInitOpen(false);
     void refreshUser();
   };
   const label = userName !== void 0 ? userName : t("footerLabel");
@@ -412,7 +456,11 @@ function NewApiFooterButton(props) {
         ]
       }
     ),
-    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Modal, { open, onClose: close, title: t("nav"), closeLabel: t("close"), children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { style: { maxHeight: "70vh", overflowY: "auto" }, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(NewApiPopup, { call, t, autoLogin: true, onAuthenticated: close }) }) })
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Modal, { open, onClose: close, title: t("nav"), closeLabel: t("close"), children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { style: { maxHeight: "70vh", overflowY: "auto" }, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(NewApiPopup, { call, t, autoLogin: true, onAuthenticated: close }) }) }),
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Modal, { open: initOpen, onClose: closeInit, title: t("initTitle"), closeLabel: t("close"), children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { maxHeight: "70vh", overflowY: "auto" }, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { margin: "0 0 10px", fontSize: 13, lineHeight: "20px", color: "var(--dsw-alias-label-secondary, inherit)" }, children: t("initHint") }),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(NewApiPopup, { call, t, autoLogin: true, onAuthenticated: closeInit })
+    ] }) })
   ] });
 }
 var NOOP_CALL = async () => ({ ok: false, error: { code: "unavailable", message: "newapi: RPC channel not available" } });
@@ -425,14 +473,14 @@ function useNewApiSession(call, t, options = {}) {
   const [passwordLoginOn, setPasswordLoginOn] = (0, import_react.useState)(false);
   const [currency, setCurrency] = (0, import_react.useState)("cny");
   const [defaultContextWindow, setDefaultContextWindow] = (0, import_react.useState)("");
-  const [server, setServer2] = (0, import_react.useState)(void 0);
+  const [server, setServer] = (0, import_react.useState)(void 0);
   const [username, setUsername] = (0, import_react.useState)("");
   const [password, setPassword] = (0, import_react.useState)("");
   const [embedded, setEmbedded] = (0, import_react.useState)(void 0);
   const [busy, setBusy] = (0, import_react.useState)(false);
   const [message, setMessage] = (0, import_react.useState)(void 0);
   const [error, setError] = (0, import_react.useState)(void 0);
-  const [snapshot, setSnapshot2] = (0, import_react.useState)(void 0);
+  const [snapshot, setSnapshot] = (0, import_react.useState)(void 0);
   const [syncing, setSyncing] = (0, import_react.useState)(false);
   const loadConfig = async () => {
     const result = await call("config.get");
@@ -449,16 +497,28 @@ function useNewApiSession(call, t, options = {}) {
     setError(`${t("loadFailed")} (${result.error.code}: ${result.error.message})`);
     return void 0;
   };
+  const applySnapshot2 = (value) => {
+    setSnapshot(value);
+    setServer(value.server);
+  };
   const loadSnapshot = async () => {
     const result = await call("snapshot.get");
-    if (result.ok) {
-      setSnapshot2(result.value);
-      setServer2(result.value.server);
+    if (!result.ok) return;
+    applySnapshot2(result.value);
+    if (result.value.stale !== true) return;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 3e3);
+      });
+      const next = await call("snapshot.get");
+      if (!next.ok) continue;
+      applySnapshot2(next.value);
+      if (next.value.stale !== true) break;
     }
   };
   const probeOnce = async (url) => {
     const result = await call("server.status", { baseUrl: url });
-    if (result.ok) setServer2(result.value.info);
+    if (result.ok) setServer(result.value.info);
   };
   const startEmbeddedLogin = async (url) => {
     setBusy(true);
@@ -534,7 +594,7 @@ function useNewApiSession(call, t, options = {}) {
       setError(result.error.message);
       return;
     }
-    setServer2(result.value.info);
+    setServer(result.value.info);
     if (result.value.baseUrl !== "" && baseUrl === "") setBaseUrl(result.value.baseUrl);
     setMessage(t("probed", { name: result.value.info.systemName, version: result.value.info.version }));
   };
@@ -585,8 +645,8 @@ function useNewApiSession(call, t, options = {}) {
     setError(void 0);
     await call("config.clear");
     setBusy(false);
-    setSnapshot2(void 0);
-    setServer2(void 0);
+    setSnapshot(void 0);
+    setServer(void 0);
     setMessage(t("cleared"));
     await loadConfig();
   };
@@ -599,8 +659,8 @@ function useNewApiSession(call, t, options = {}) {
       setError(result.error.message);
       return;
     }
-    setSnapshot2(result.value);
-    setServer2(result.value.server);
+    applySnapshot2(result.value);
+    if (result.value.stale === true) setError(t("staleCache", { time: formatCachedAt(result.value.cachedAt) }));
   };
   return {
     config,
@@ -789,6 +849,7 @@ function NewApiPopup(props) {
         t("notConfigured")
       ] })
     ] }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(StaleNote, { snapshot, t }),
       /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { style: cardStyle, children: [
         /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: 10 }, children: [
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { style: {
@@ -942,10 +1003,7 @@ function NewApiSettings(props) {
     }
     setCreatedKey({ name: result.value.name, key: result.value.key });
     const refreshed = await call("snapshot.get", { force: true });
-    if (refreshed.ok) {
-      setSnapshot(refreshed.value);
-      setServer(refreshed.value.server);
-    }
+    if (refreshed.ok) applySnapshot(refreshed.value);
   };
   const onCopyKey = async (key) => {
     try {
@@ -1122,6 +1180,7 @@ function NewApiSettings(props) {
       ] })
     ] }),
     snapshot !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(StaleNote, { snapshot, t }),
       /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { style: cardStyle, children: [
         /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: 8 }, children: [
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h4", { style: { ...cardTitleStyle, flex: 1 }, children: t("account") }),

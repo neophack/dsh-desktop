@@ -104,6 +104,10 @@ interface SnapshotView {
   tokens: TokenRow[]
   models: ModelRow[]
   usage: UsageView
+  /** True when this is cached data served while a refresh runs / failed. */
+  stale?: boolean
+  /** Unix ms timestamp of the cached data (present with `stale`). */
+  cachedAt?: number
 }
 
 const QUOTA_PER_UNIT = 500_000
@@ -130,6 +134,22 @@ function formatQuota(quota: number | undefined, quotaPerUnit: number, currency: 
 function formatDate(seconds: number | undefined): string {
   if (seconds === undefined || seconds <= 0) return '--'
   return new Date(seconds * 1000).toLocaleDateString()
+}
+
+function formatCachedAt(ms: number | undefined): string {
+  if (ms === undefined) return '--'
+  return new Date(ms).toLocaleString()
+}
+
+/** Offline / background-refresh notice shown above data served from cache. */
+function StaleNote(props: { snapshot: SnapshotView | undefined, t: NonNullable<SectionProps['t']> }): JSX.Element | null {
+  if (props.snapshot?.stale !== true) return null
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--dsw-alias-label-tertiary, inherit)' }}>
+      <StateDot state="warning" />
+      {props.t('staleCache', { time: formatCachedAt(props.snapshot.cachedAt) })}
+    </span>
+  )
 }
 
 /** Looser structural typing for the client Cordis context (bundle is untyped). */
@@ -314,13 +334,16 @@ const zh: Record<string, string> = {
   limitSaved: '已保存 {model} 的限制并重新同步',
   defaultLimitDisplay: '默认 {window}',
   failure: '操作失败',
+  staleCache: '网络不可用或服务器无法连接, 正在显示缓存数据 (更新于 {time})',
   // Popup-only copy.
-  popupOpenSettings: '完整设置',
-  popupUsageTitle: '套餐用量',
+  popupOpenSettings: '完整设置',  popupUsageTitle: '套餐用量',
   popupTokenUsage: '密钥用量',
   popupRequests: '{count} 次请求',
   popupServer: '服务器',
   popupSignedInAs: '已登录',
+  // Init key-setup dialog copy.
+  initTitle: '设置 NewAPI',
+  initHint: '尚未配置 NewAPI 密钥, 对话中的 NewAPI 模型暂不可见。完成登录后插件会自动获取/创建密钥并同步模型, 本弹窗随之自动关闭。',
 }
 
 const en: Record<string, string> = {
@@ -408,6 +431,7 @@ const en: Record<string, string> = {
   limitSaved: 'Saved limits for {model} and re-synced',
   defaultLimitDisplay: 'default {window}',
   failure: 'Operation failed',
+  staleCache: 'Network unavailable or server unreachable — showing cached data (updated {time})',
   // Popup-only copy.
   popupOpenSettings: 'All settings',
   popupUsageTitle: 'Plan usage',
@@ -415,6 +439,9 @@ const en: Record<string, string> = {
   popupRequests: '{count} requests',
   popupServer: 'Server',
   popupSignedInAs: 'Signed in',
+  // Init key-setup dialog copy.
+  initTitle: 'Set up NewAPI',
+  initHint: 'No NewAPI credential yet, so the NewAPI models stay hidden in the chat selector. Finish the sign-in and the plugin captures/creates the key and syncs the models automatically — this dialog then closes by itself.',
 }
 
 /** Flat card wrapper: layer-1 surface, hairline border, 12px radius. */
@@ -493,6 +520,15 @@ function NewApiFooterButton(props: FooterProps): JSX.Element | null {
   const { wide, call, t } = props
   const [open, setOpen] = useState(false)
   const [userName, setUserName] = useState<string | undefined>(undefined)
+  /**
+   * Initialization key-setup dialog: when the app first renders and no
+   * credential is stored yet, the sign-in popup opens by itself (it jumps
+   * straight into the embedded provider login). It closes automatically the
+   * moment NewAPI is configured — via a login completed here, or because the
+   * Host restored/installed the key on its own — so the user is never left
+   * with a stale prompt.
+   */
+  const [initOpen, setInitOpen] = useState(false)
 
   /** Light identity refresh: a cached-when-possible user-only fetch. */
   const refreshUser = async (): Promise<void> => {
@@ -503,12 +539,42 @@ function NewApiFooterButton(props: FooterProps): JSX.Element | null {
       : undefined)
   }
 
-  useEffect(() => { void refreshUser() }, [])
+  /** True when NewAPI has both the session and the chat API key ready. */
+  const isConfigured = async (): Promise<boolean> => {
+    if (call === undefined) return true
+    const result = await call<ConfigView>('config.get')
+    return result.ok && result.value.tokenConfigured && result.value.apiKeyConfigured
+  }
+
+  useEffect(() => {
+    void (async () => {
+      await refreshUser()
+      if (await isConfigured()) return
+      setInitOpen(true)
+    })()
+  }, [])
+
+  // While the init dialog is up, watch for NewAPI becoming configured from
+  // anywhere (this popup's login, another window, Host-side self-heal) and
+  // close it as soon as the credential pair is complete.
+  useEffect(() => {
+    if (!initOpen || call === undefined) return
+    const timer = setInterval(() => {
+      void (async () => {
+        if (await isConfigured()) setInitOpen(false)
+      })()
+    }, 3000)
+    return () => { clearInterval(timer) }
+  }, [initOpen])
 
   if (call === undefined || t === undefined) return null
 
   const close = (): void => {
     setOpen(false)
+    void refreshUser()
+  }
+  const closeInit = (): void => {
+    setInitOpen(false)
     void refreshUser()
   }
 
@@ -543,6 +609,14 @@ function NewApiFooterButton(props: FooterProps): JSX.Element | null {
       <Modal open={open} onClose={close} title={t('nav')} closeLabel={t('close')}>
         <div style={{ maxHeight: '70vh', overflowY: 'auto' }}>
           <NewApiPopup call={call} t={t} autoLogin onAuthenticated={close} />
+        </div>
+      </Modal>
+      <Modal open={initOpen} onClose={closeInit} title={t('initTitle')} closeLabel={t('close')}>
+        <div style={{ maxHeight: '70vh', overflowY: 'auto' }}>
+          <p style={{ margin: '0 0 10px', fontSize: 13, lineHeight: '20px', color: 'var(--dsw-alias-label-secondary, inherit)' }}>
+            {t('initHint')}
+          </p>
+          <NewApiPopup call={call} t={t} autoLogin onAuthenticated={closeInit} />
         </div>
       </Modal>
     </Fragment>
@@ -643,11 +717,28 @@ function useNewApiSession(
     return undefined
   }
 
+  const applySnapshot = (value: SnapshotView): void => {
+    setSnapshot(value)
+    setServer(value.server)
+  }
+
+  /**
+   * Load the snapshot. When the Host served a stale cache (offline server or
+   * a background refresh still running), re-poll until the data turns fresh
+   * or the retries run out — the extra calls join the Host-side in-flight
+   * refresh, so they cost nothing extra.
+   */
   const loadSnapshot = async (): Promise<void> => {
     const result = await call<SnapshotView>('snapshot.get')
-    if (result.ok) {
-      setSnapshot(result.value)
-      setServer(result.value.server)
+    if (!result.ok) return
+    applySnapshot(result.value)
+    if (result.value.stale !== true) return
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      await new Promise((resolve) => { setTimeout(resolve, 3000) })
+      const next = await call<SnapshotView>('snapshot.get')
+      if (!next.ok) continue
+      applySnapshot(next.value)
+      if (next.value.stale !== true) break
     }
   }
 
@@ -814,12 +905,14 @@ function useNewApiSession(
     setError(undefined)
     const result = await call<SnapshotView>('snapshot.get', { force: true })
     setBusy(false)
+    // Offline: the Host falls back to the stale cache instead of failing, so
+    // the surface keeps showing the last known data (flagged stale).
     if (!result.ok) {
       setError(result.error.message)
       return
     }
-    setSnapshot(result.value)
-    setServer(result.value.server)
+    applySnapshot(result.value)
+    if (result.value.stale === true) setError(t('staleCache', { time: formatCachedAt(result.value.cachedAt) }))
   }
 
   return {
@@ -975,6 +1068,9 @@ function NewApiPopup(props: SectionProps): JSX.Element | null {
             )
             : (
               <>
+                {/* Cached-data notice while offline / background refresh */}
+                <StaleNote snapshot={snapshot} t={t} />
+
                 {/* Account summary */}
                 <section style={cardStyle}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -1122,10 +1218,7 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
     }
     setCreatedKey({ name: result.value.name, key: result.value.key })
     const refreshed = await call<SnapshotView>('snapshot.get', { force: true })
-    if (refreshed.ok) {
-      setSnapshot(refreshed.value)
-      setServer(refreshed.value.server)
-    }
+    if (refreshed.ok) applySnapshot(refreshed.value)
   }
 
   const onCopyKey = async (key: string): Promise<void> => {
@@ -1322,6 +1415,8 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
 
       {snapshot !== undefined && (
         <>
+          <StaleNote snapshot={snapshot} t={t} />
+
           {/* Account details + plan usage bar */}
           <section style={cardStyle}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

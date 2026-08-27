@@ -70,6 +70,9 @@ export const DESKTOP_PROFILE_ROOT = 'cordis.yml'
 const BIN_NAME = DESKTOP_PACKAGE_NAME
 const REQUIRED_BUNDLES = requiredWebBundles()
 const REQUIRED_BUNDLE_SET = new Set(REQUIRED_BUNDLES)
+/** Bundles the launcher installs by default (shipped as app dependencies). */
+const DESKTOP_DEFAULT_BUNDLES = ['dsh-plugin-newapi']
+const DESKTOP_DEFAULT_BUNDLE_SET = new Set(DESKTOP_DEFAULT_BUNDLES)
 const OBSOLETE_DESKTOP_BUNDLE_SET = new Set(['@deepseek-ai/dsh-desktop-app'])
 const INSTALL_ANCHOR = unpackedAsarPath(fileURLToPath(new URL('../package.json', import.meta.url)))
 const DESKTOP_PATCH_PATH = fileURLToPath(new URL('../cordis.patch.yml', import.meta.url))
@@ -282,13 +285,14 @@ export interface SkippedOptionalEntry {
 /**
  * Normalize the installation-owned prefix while preserving third-party order.
  * @param current - current persistent bundle list.
- * @returns base, Web carrier, then every third-party bundle in prior order.
+ * @returns base, Web carrier, launcher defaults, then every third-party bundle in prior order.
  */
 export function desktopBundleList(current: readonly string[]): string[] {
   const thirdParty = current.filter(name => !REQUIRED_BUNDLE_SET.has(name)
+    && !DESKTOP_DEFAULT_BUNDLE_SET.has(name)
     && name !== DESKTOP_PACKAGE_NAME
     && !OBSOLETE_DESKTOP_BUNDLE_SET.has(name))
-  return [...REQUIRED_BUNDLES, ...thirdParty]
+  return [...REQUIRED_BUNDLES, ...DESKTOP_DEFAULT_BUNDLES, ...thirdParty]
 }
 
 /** Return whether two ordered string lists are identical. */
