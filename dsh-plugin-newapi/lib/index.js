@@ -1,4 +1,7 @@
 // src/index.ts
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import path from "node:path";
 import { credentialRef } from "@deepseek-ai/dsh-credentials";
 import z from "@deepseek-ai/schemastery";
 
@@ -13,8 +16,8 @@ var NewApiError = class extends Error {
     this.status = status;
   }
 };
-function joinUrl(base, path) {
-  return `${base.replace(/\/+$/, "")}${path}`;
+function joinUrl(base, path2) {
+  return `${base.replace(/\/+$/, "")}${path2}`;
 }
 var BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 function looksLikeJwt(value) {
@@ -23,8 +26,26 @@ function looksLikeJwt(value) {
 }
 var sharedTransport = {
   lastRequestAt: 0,
-  rateLimitedUntil: 0
+  rateLimitedUntil: 0,
+  /** Consecutive 429 strikes; drives the exponential cooldown. */
+  rateLimitStrikes: 0,
+  /**
+   * Shared short-lived bearer: every NewApiClient in this process exchanges
+   * the SAME refresh cookie, so one refresh must serve them all. Per-instance
+   * bearers made each client (snapshot, login-watch, probes) mint its own
+   * token, multiplying /api/user/auth/refresh calls — a CriticalRateLimit
+   * path on new-api servers and the dominant source of plugin-only 429s.
+   */
+  bearer: void 0,
+  bearerExpiresAt: 0
 };
+function sharedCooldownRemaining() {
+  return Math.max(0, sharedTransport.rateLimitedUntil - Date.now());
+}
+function rateLimitCooldownMs() {
+  const strikes = Math.min(sharedTransport.rateLimitStrikes, 5);
+  return Math.min(15e3 * 2 ** strikes, 3e5);
+}
 var NewApiClient = class {
   baseUrl;
   auth;
@@ -54,6 +75,8 @@ var NewApiClient = class {
     this.cookies.clear();
     this.bearer = void 0;
     this.bearerExpiresAt = 0;
+    sharedTransport.bearer = void 0;
+    sharedTransport.bearerExpiresAt = 0;
     this.seedAuthCookie(auth);
   }
   /** Seed the private jar from a cookie-backed credential. */
@@ -114,9 +137,9 @@ var NewApiClient = class {
    * (Retry-After honored, else 10s) so no code path can pile onto a server
    * that is already rate-limiting us.
    */
-  async request(path, init, signal) {
+  async request(path2, init, signal) {
     if (Date.now() < sharedTransport.rateLimitedUntil) {
-      throw new NewApiError(`newapi: rate-limit cooldown active, skipping ${path}`, 429);
+      throw new NewApiError(`newapi: rate-limit cooldown active, skipping ${path2}`, 429);
     }
     const run = async () => {
       const gap = sharedTransport.lastRequestAt + this.minRequestGapMs - Date.now();
@@ -129,7 +152,7 @@ var NewApiClient = class {
       const onOuterAbort = () => controller.abort(new Error("aborted"));
       signal?.addEventListener("abort", onOuterAbort, { once: true });
       try {
-        const response = await fetch(joinUrl(this.baseUrl, path), {
+        const response = await fetch(joinUrl(this.baseUrl, path2), {
           method: init.method,
           headers: this.buildHeaders(init.method, init.body === void 0 ? {} : { "content-type": "application/json" }),
           ...init.body === void 0 ? {} : { body: JSON.stringify(init.body) },
@@ -139,11 +162,14 @@ var NewApiClient = class {
         this.captureCookies(response);
         if (response.status === 429) {
           const retryAfter = Number(response.headers.get("retry-after"));
-          sharedTransport.rateLimitedUntil = Date.now() + (Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1e3 : 1e4);
-          throw new NewApiError(`newapi: HTTP 429 for ${path}`, 429);
+          sharedTransport.rateLimitStrikes += 1;
+          const cooldown = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1e3 : rateLimitCooldownMs();
+          sharedTransport.rateLimitedUntil = Math.max(sharedTransport.rateLimitedUntil, Date.now() + cooldown);
+          throw new NewApiError(`newapi: HTTP 429 for ${path2}`, 429);
         }
+        sharedTransport.rateLimitStrikes = 0;
         if (!response.ok) {
-          let message = `newapi: HTTP ${String(response.status)} for ${path}`;
+          let message = `newapi: HTTP ${String(response.status)} for ${path2}`;
           try {
             const body = await response.json();
             if (typeof body.message === "string" && body.message !== "") message = body.message;
@@ -153,7 +179,7 @@ var NewApiClient = class {
         }
         const envelope = await response.json();
         if (envelope.success === false) {
-          throw new NewApiError(`newapi: ${envelope.message ?? "request failed"} (${path})`, response.status);
+          throw new NewApiError(`newapi: ${envelope.message ?? "request failed"} (${path2})`, response.status);
         }
         return { status: response.status, envelope };
       } finally {
@@ -165,12 +191,12 @@ var NewApiClient = class {
     this.queueTail = attempt.then(() => void 0, () => void 0);
     return attempt;
   }
-  async get(path, signal) {
-    const { envelope } = await this.request(path, { method: "GET" }, signal);
+  async get(path2, signal) {
+    const { envelope } = await this.request(path2, { method: "GET" }, signal);
     return envelope.data;
   }
-  async post(path, body, signal) {
-    const { envelope } = await this.request(path, { method: "POST", body }, signal);
+  async post(path2, body, signal) {
+    const { envelope } = await this.request(path2, { method: "POST", body }, signal);
     return envelope.data;
   }
   learnUser(value) {
@@ -252,6 +278,8 @@ var NewApiClient = class {
     if (typeof data.access_token === "string" && looksLikeJwt(data.access_token)) {
       this.bearer = data.access_token;
       this.bearerExpiresAt = typeof data.access_expires_at === "number" ? data.access_expires_at : 0;
+      sharedTransport.bearer = this.bearer;
+      sharedTransport.bearerExpiresAt = this.bearerExpiresAt;
     }
     this.learnUser(data.user);
   }
@@ -259,6 +287,11 @@ var NewApiClient = class {
     if (this.auth?.kind === "token") return Promise.resolve();
     const horizon = Math.floor(Date.now() / 1e3) + 60;
     if (this.bearer !== void 0 && this.bearerExpiresAt > horizon) return Promise.resolve();
+    if (sharedTransport.bearer !== void 0 && sharedTransport.bearerExpiresAt > horizon) {
+      this.bearer = sharedTransport.bearer;
+      this.bearerExpiresAt = sharedTransport.bearerExpiresAt;
+      return Promise.resolve();
+    }
     return this.refresh(signal);
   }
   // --- authenticated data ----------------------------------------------------
@@ -707,6 +740,39 @@ function apply(ctx, config = {}) {
   let snapshotCache;
   let snapshotInFlight;
   let rateLimitedUntil = 0;
+  const CACHE_DIR = process.env.DSH_NEWAPI_CACHE_DIR ?? path.join(homedir(), ".dsh", "cache");
+  const CACHE_FILE = path.join(CACHE_DIR, "newapi-snapshots.json");
+  let persistedSnapshots;
+  async function loadPersistedSnapshots() {
+    try {
+      const raw = await readFile(CACHE_FILE, "utf8");
+      const parsed = JSON.parse(raw);
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return;
+      persistedSnapshots = parsed;
+      const hit = persistedSnapshots[currentBaseUrl()];
+      if (hit !== void 0 && snapshotCache === void 0) snapshotCache = hit;
+    } catch {
+      persistedSnapshots = {};
+    }
+  }
+  async function persistSnapshot(baseUrl, payload) {
+    try {
+      if (persistedSnapshots === void 0) persistedSnapshots = {};
+      persistedSnapshots[baseUrl] = { payload, at: Date.now() };
+      await mkdir(CACHE_DIR, { recursive: true });
+      await writeFile(CACHE_FILE, JSON.stringify(persistedSnapshots), "utf8");
+    } catch (error) {
+      logger.warn(`newapi: persisting the snapshot cache failed: ${describeError(error)}`);
+    }
+  }
+  async function dropPersistedSnapshots() {
+    persistedSnapshots = {};
+    try {
+      await rm(CACHE_FILE, { force: true });
+    } catch {
+    }
+  }
+  void loadPersistedSnapshots();
   function snapshotClientFor(baseUrl, credential) {
     const key = `${baseUrl}\0${credential.kind}\0${credential.value}`;
     if (snapshotClient === void 0 || key !== snapshotClientKey) {
@@ -719,22 +785,18 @@ function apply(ctx, config = {}) {
   function invalidateSnapshot() {
     snapshotCache = void 0;
     rateLimitedUntil = 0;
+    void dropPersistedSnapshots();
   }
-  async function fetchSnapshot(signal, force = false) {
-    const now = Date.now();
-    if (!force) {
-      if (snapshotCache !== void 0 && now - snapshotCache.at < SNAPSHOT_TTL_MS) {
-        return ok(snapshotCache.payload);
-      }
-      if (now < rateLimitedUntil) {
-        if (snapshotCache !== void 0) return ok(snapshotCache.payload);
-        return fail("rate-limited", `newapi: rate-limited by the server; retry in ${String(Math.ceil((rateLimitedUntil - now) / 1e3))}s`);
-      }
-      if (snapshotInFlight !== void 0) return snapshotInFlight;
-    }
+  function staleSnapshot() {
+    if (snapshotCache === void 0) return void 0;
+    return ok({ ...snapshotCache.payload, stale: true, cachedAt: snapshotCache.at });
+  }
+  function refreshSnapshot(signal) {
     const flight = (async () => {
       const baseUrl = currentBaseUrl();
       if (baseUrl === "") return fail("not-configured", "no NewAPI base URL configured");
+      const cooldown = Math.max(rateLimitedUntil - Date.now(), sharedCooldownRemaining());
+      if (cooldown > 0) return fail("rate-limited", `newapi: rate-limit cooldown active (${String(Math.ceil(cooldown / 1e3))}s left)`);
       const credential = await currentCredential();
       if (credential === void 0) return fail("not-configured", "no NewAPI credential configured");
       const client = snapshotClientFor(baseUrl, credential);
@@ -756,12 +818,36 @@ function apply(ctx, config = {}) {
         });
       } catch (error) {
         if (error instanceof NewApiError && error.status === 429) {
-          rateLimitedUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
+          rateLimitedUntil = Date.now() + Math.max(RATE_LIMIT_COOLDOWN_MS, sharedCooldownRemaining());
           return fail("rate-limited", "newapi: server rate limit (429) hit; wait a moment before retrying");
         }
         return fail("fetch-failed", describeError(error));
       }
     })();
+    return flight;
+  }
+  async function fetchSnapshot(signal, force = false) {
+    const now = Date.now();
+    if (!force) {
+      if (snapshotCache !== void 0 && now - snapshotCache.at < SNAPSHOT_TTL_MS) {
+        return ok(snapshotCache.payload);
+      }
+      if (now < rateLimitedUntil) {
+        const stale2 = staleSnapshot();
+        if (stale2 !== void 0) return stale2;
+        return fail("rate-limited", `newapi: rate-limited by the server; retry in ${String(Math.ceil((rateLimitedUntil - now) / 1e3))}s`);
+      }
+      if (snapshotInFlight !== void 0) return snapshotInFlight;
+      if (snapshotCache !== void 0) {
+        const background = refreshSnapshot(void 0);
+        snapshotInFlight = background;
+        void background.finally(() => {
+          snapshotInFlight = void 0;
+        });
+        return staleSnapshot();
+      }
+    }
+    const flight = refreshSnapshot(signal);
     if (!force) {
       snapshotInFlight = flight;
       void flight.finally(() => {
@@ -769,13 +855,22 @@ function apply(ctx, config = {}) {
       });
     }
     const result = await flight;
-    if (result.ok) snapshotCache = { payload: result.value, at: Date.now() };
+    if (result.ok) {
+      snapshotCache = { payload: result.value, at: Date.now() };
+      void persistSnapshot(result.value.baseUrl, result.value);
+      return result;
+    }
+    const stale = staleSnapshot();
+    if (stale !== void 0) {
+      if (snapshotCache !== void 0) snapshotCache.at = 0;
+      return stale;
+    }
     return result;
   }
   async function fetchUser(signal) {
     const cached = snapshotCache;
     if (cached !== void 0 && Date.now() - cached.at < SNAPSHOT_TTL_MS) return ok(cached.payload.user);
-    if (Date.now() < rateLimitedUntil) {
+    if (Date.now() < rateLimitedUntil || sharedCooldownRemaining() > 0) {
       if (cached !== void 0) return ok(cached.payload.user);
       return fail("rate-limited", "newapi: rate-limited by the server; retry shortly");
     }
@@ -787,6 +882,7 @@ function apply(ctx, config = {}) {
       return ok(redactUser(await snapshotClientFor(baseUrl, credential).getUser(signal)));
     } catch (error) {
       if (error instanceof NewApiError && error.status === 429) rateLimitedUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
+      if (cached !== void 0) return ok(cached.payload.user);
       return fail("fetch-failed", describeError(error));
     }
   }
@@ -935,6 +1031,7 @@ function apply(ctx, config = {}) {
       await ctx.credentials.unset(ref);
       await ctx.credentials.unset(sessionRef);
       await scope.update({ authKind: "" });
+      await removeRouteFromCatalog("signed out");
       snapshotClient = void 0;
       snapshotClientKey = "";
       invalidateSnapshot();
@@ -1072,6 +1169,21 @@ function apply(ctx, config = {}) {
       return fail("internal", describeError(error));
     }
   }, { authority: "loopback" });
+  async function removeRouteFromCatalog(reason) {
+    try {
+      const section = ctx.settings.get(LLM_PI_AI_NS);
+      if (section?.providers === void 0 || !(route in section.providers)) return;
+      const mutate = ctx.settings.mutate;
+      if (mutate === void 0) {
+        logger.warn("newapi: settings service exposes no mutate; cannot hide the key-less route");
+        return;
+      }
+      await mutate(LLM_PI_AI_NS, [{ op: "unset", path: ["providers", route] }]);
+      logger.info(`newapi: removed the key-less route "${route}" from the chat model catalog (${reason})`);
+    } catch (error) {
+      logger.warn(`newapi: removing the key-less route failed: ${describeError(error)}`);
+    }
+  }
   async function ensureApiKeyStored() {
     try {
       const described = await ctx.credentials.describe(ref);
@@ -1088,7 +1200,19 @@ function apply(ctx, config = {}) {
       logger.warn(`newapi: restoring the chat API key failed: ${describeError(error)}`);
     }
   }
-  void ensureApiKeyStored();
+  async function hideRouteWhenKeyMissing() {
+    try {
+      const described = await ctx.credentials.describe(ref);
+      if (described.configured) return;
+      await removeRouteFromCatalog("api key missing at startup");
+    } catch (error) {
+      logger.warn(`newapi: startup catalog guard failed: ${describeError(error)}`);
+    }
+  }
+  void (async () => {
+    await ensureApiKeyStored();
+    await hideRouteWhenKeyMissing();
+  })();
   logger.info(`newapi: ready (route=${route}, apiKeyEnv=${apiKeyEnv})`);
 }
 function readBaseUrl(payload) {

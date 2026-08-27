@@ -17,10 +17,13 @@
  * provider profile through the official settings seam, so every existing
  * consumer (chat model selector, catalog, retry policies) keeps working.
  */
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import path from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import z from '@deepseek-ai/schemastery'
-import { NewApiClient, NewApiError, mergeModels, usageFromUser } from './newapi-client.ts'
+import { NewApiClient, NewApiError, mergeModels, sharedCooldownRemaining, usageFromUser } from './newapi-client.ts'
 import type { NewApiServerInfo, NewApiToken, NewApiUser } from './newapi-client.ts'
 import type { NewApiSnapshot } from './types.ts'
 
@@ -530,6 +533,57 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
   let snapshotInFlight: Promise<RpcResult<SnapshotPayload>> | undefined
   let rateLimitedUntil = 0
 
+  // --- persisted snapshot cache -----------------------------------------------
+  //
+  // The snapshot also survives restarts and offline spells: every successful
+  // fetch is mirrored to a JSON file on disk (keyed by base URL, since the
+  // address can change accounts) and reloaded at startup. While offline the
+  // UIs then serve the last known data instead of an error, and a window
+  // opening shows it instantly while a refresh runs in the background.
+
+  const CACHE_DIR = process.env.DSH_NEWAPI_CACHE_DIR ?? path.join(homedir(), '.dsh', 'cache')
+  const CACHE_FILE = path.join(CACHE_DIR, 'newapi-snapshots.json')
+  /** baseUrl -> { payload, at }; loaded once, written through on success. */
+  let persistedSnapshots: Record<string, { payload: SnapshotPayload, at: number }> | undefined
+
+  async function loadPersistedSnapshots(): Promise<void> {
+    try {
+      const raw = await readFile(CACHE_FILE, 'utf8')
+      const parsed: unknown = JSON.parse(raw)
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return
+      persistedSnapshots = parsed as Record<string, { payload: SnapshotPayload, at: number }>
+      // Seed the in-memory cache for the configured address so the first
+      // window open after a (re)start serves data without hitting the server.
+      const hit = persistedSnapshots[currentBaseUrl()]
+      if (hit !== undefined && snapshotCache === undefined) snapshotCache = hit
+    } catch {
+      persistedSnapshots = {}
+    }
+  }
+
+  async function persistSnapshot(baseUrl: string, payload: SnapshotPayload): Promise<void> {
+    try {
+      if (persistedSnapshots === undefined) persistedSnapshots = {}
+      persistedSnapshots[baseUrl] = { payload, at: Date.now() }
+      await mkdir(CACHE_DIR, { recursive: true })
+      await writeFile(CACHE_FILE, JSON.stringify(persistedSnapshots), 'utf8')
+    } catch (error) {
+      logger.warn(`newapi: persisting the snapshot cache failed: ${describeError(error)}`)
+    }
+  }
+
+  /** Forget every persisted snapshot (credential changed / signed out). */
+  async function dropPersistedSnapshots(): Promise<void> {
+    persistedSnapshots = {}
+    try {
+      await rm(CACHE_FILE, { force: true })
+    } catch {
+      // Best-effort; a stale file is overwritten on the next persist.
+    }
+  }
+
+  void loadPersistedSnapshots()
+
   /**
    * Reuse the snapshot client across calls so its short-lived bearer survives;
    * `adopt` resets the bearer, so only re-seed when the credential changed.
@@ -547,25 +601,30 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
   function invalidateSnapshot(): void {
     snapshotCache = undefined
     rateLimitedUntil = 0
+    void dropPersistedSnapshots()
   }
 
-  /** Full snapshot; errors collapse into one typed failure for the UI. */
-  async function fetchSnapshot(signal: AbortSignal | undefined, force = false): Promise<RpcResult<SnapshotPayload>> {
-    const now = Date.now()
-    if (!force) {
-      if (snapshotCache !== undefined && now - snapshotCache.at < SNAPSHOT_TTL_MS) {
-        return ok(snapshotCache.payload)
-      }
-      if (now < rateLimitedUntil) {
-        // Cooling down after a 429: serve the stale cache rather than piling on.
-        if (snapshotCache !== undefined) return ok(snapshotCache.payload)
-        return fail('rate-limited', `newapi: rate-limited by the server; retry in ${String(Math.ceil((rateLimitedUntil - now) / 1000))}s`)
-      }
-      if (snapshotInFlight !== undefined) return snapshotInFlight
-    }
+  /** Serve the cached snapshot flagged as stale (offline / cooling down). */
+  function staleSnapshot(): RpcResult<SnapshotPayload> | undefined {
+    if (snapshotCache === undefined) return undefined
+    return ok({ ...snapshotCache.payload, stale: true, cachedAt: snapshotCache.at })
+  }
+
+  /**
+   * Perform one full network fetch; shared by the direct path (no cache yet /
+   * manual refresh) and the background refresh behind a stale cache.
+   */
+  function refreshSnapshot(signal: AbortSignal | undefined): Promise<RpcResult<SnapshotPayload>> {
     const flight = (async (): Promise<RpcResult<SnapshotPayload>> => {
       const baseUrl = currentBaseUrl()
       if (baseUrl === '') return fail('not-configured', 'no NewAPI base URL configured')
+      // Cooldown check must live HERE, not only in fetchSnapshot: the stale
+      // cache serves a background refresh through this function on every
+      // non-force call, and skipping the check let UI polling pile a full
+      // 5-request burst onto the server every few seconds DURING the cooldown
+      // — the self-sustaining "always 429" loop.
+      const cooldown = Math.max(rateLimitedUntil - Date.now(), sharedCooldownRemaining())
+      if (cooldown > 0) return fail('rate-limited', `newapi: rate-limit cooldown active (${String(Math.ceil(cooldown / 1000))}s left)`)
       const credential = await currentCredential()
       if (credential === undefined) return fail('not-configured', 'no NewAPI credential configured')
       const client = snapshotClientFor(baseUrl, credential)
@@ -588,18 +647,67 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
         })
       } catch (error) {
         if (error instanceof NewApiError && error.status === 429) {
-          rateLimitedUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS
+          // Mirror the transport's exponential cooldown (Retry-After honored
+          // there) so the host gate and the transport back off in lockstep.
+          rateLimitedUntil = Date.now() + Math.max(RATE_LIMIT_COOLDOWN_MS, sharedCooldownRemaining())
           return fail('rate-limited', 'newapi: server rate limit (429) hit; wait a moment before retrying')
         }
         return fail('fetch-failed', describeError(error))
       }
     })()
+    return flight
+  }
+
+  /**
+   * Full snapshot; errors collapse into one typed failure for the UI.
+   *
+   * Cache policy: a fresh cache serves directly; a stale cache is returned
+   * immediately (flagged `stale`) while one refresh runs in the background —
+   * the caller can re-poll and will join that in-flight refresh. When even
+   * the fetch fails (offline server), the stale cache is served instead of an
+   * error, so the UIs keep showing the last known data.
+   */
+  async function fetchSnapshot(signal: AbortSignal | undefined, force = false): Promise<RpcResult<SnapshotPayload>> {
+    const now = Date.now()
+    if (!force) {
+      if (snapshotCache !== undefined && now - snapshotCache.at < SNAPSHOT_TTL_MS) {
+        return ok(snapshotCache.payload)
+      }
+      if (now < rateLimitedUntil) {
+        // Cooling down after a 429: serve the stale cache rather than piling on.
+        const stale = staleSnapshot()
+        if (stale !== undefined) return stale
+        return fail('rate-limited', `newapi: rate-limited by the server; retry in ${String(Math.ceil((rateLimitedUntil - now) / 1000))}s`)
+      }
+      if (snapshotInFlight !== undefined) return snapshotInFlight
+      if (snapshotCache !== undefined) {
+        // Stale: hand it out right away and refresh in the background.
+        const background = refreshSnapshot(undefined)
+        snapshotInFlight = background
+        void background.finally(() => { snapshotInFlight = undefined })
+        return staleSnapshot() as RpcResult<SnapshotPayload>
+      }
+    }
+    const flight = refreshSnapshot(signal)
     if (!force) {
       snapshotInFlight = flight
       void flight.finally(() => { snapshotInFlight = undefined })
     }
     const result = await flight
-    if (result.ok) snapshotCache = { payload: result.value, at: Date.now() }
+    if (result.ok) {
+      snapshotCache = { payload: result.value, at: Date.now() }
+      void persistSnapshot(result.value.baseUrl, result.value)
+      return result
+    }
+    // Offline (or the fetch failed): fall back to the last known data, and
+    // age the in-memory cache so later non-force calls also take the
+    // stale-serve path (retrying in the background) instead of treating the
+    // unfetchable data as fresh for the rest of the TTL.
+    const stale = staleSnapshot()
+    if (stale !== undefined) {
+      if (snapshotCache !== undefined) snapshotCache.at = 0
+      return stale
+    }
     return result
   }
 
@@ -607,7 +715,7 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
   async function fetchUser(signal: AbortSignal | undefined): Promise<RpcResult<NewApiUser>> {
     const cached = snapshotCache
     if (cached !== undefined && Date.now() - cached.at < SNAPSHOT_TTL_MS) return ok(cached.payload.user)
-    if (Date.now() < rateLimitedUntil) {
+    if (Date.now() < rateLimitedUntil || sharedCooldownRemaining() > 0) {
       if (cached !== undefined) return ok(cached.payload.user)
       return fail('rate-limited', 'newapi: rate-limited by the server; retry shortly')
     }
@@ -619,6 +727,9 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
       return ok(redactUser(await snapshotClientFor(baseUrl, credential).getUser(signal)))
     } catch (error) {
       if (error instanceof NewApiError && error.status === 429) rateLimitedUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS
+      // Offline: keep the footer identity on the last known user instead of
+      // dropping back to the "sign in" label.
+      if (cached !== undefined) return ok(cached.payload.user)
       return fail('fetch-failed', describeError(error))
     }
   }
@@ -788,6 +899,9 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
       await ctx.credentials.unset(ref)
       await ctx.credentials.unset(sessionRef)
       await scope.update({ authKind: '' } as { baseUrl?: string, authKind?: string, passwordLogin?: string })
+      // Credentials are gone: drop the chat route too so the selector stops
+      // offering key-less models (models.sync re-adds it after the next login).
+      await removeRouteFromCatalog('signed out')
       snapshotClient = undefined
       snapshotClientKey = ''
       invalidateSnapshot()
@@ -939,6 +1053,32 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
   }, { authority: 'loopback' })
 
   /**
+   * Hide the chat models while they cannot work: when the chat API key is
+   * missing, the synced `llm-pi-ai` route would still show its models in the
+   * chat selector and fail every request with MISSING_CREDENTIAL. Remove the
+   * route (a path-addressed `unset` — sparse `update` patches can never delete
+   * a key) so the selector drops the group until the next `models.sync` after
+   * a successful login/key restore re-adds it.
+   */
+  async function removeRouteFromCatalog(reason: string): Promise<void> {
+    try {
+      const section = ctx.settings.get(LLM_PI_AI_NS) as { providers?: Record<string, unknown> } | undefined
+      if (section?.providers === undefined || !(route in section.providers)) return
+      const mutate = (ctx.settings as unknown as {
+        mutate?: (ns: string, ops: Array<{ op: 'unset', path: string[] }>) => Promise<void>
+      }).mutate
+      if (mutate === undefined) {
+        logger.warn('newapi: settings service exposes no mutate; cannot hide the key-less route')
+        return
+      }
+      await mutate(LLM_PI_AI_NS, [{ op: 'unset', path: ['providers', route] }])
+      logger.info(`newapi: removed the key-less route "${route}" from the chat model catalog (${reason})`)
+    } catch (error) {
+      logger.warn(`newapi: removing the key-less route failed: ${describeError(error)}`)
+    }
+  }
+
+  /**
    * Self-heal a lost chat API key: the credential store can lose NEWAPI_API_KEY
    * (e.g. an unclean shutdown across app instances) while the session cookie
    * survives; rebuild the key from that session so chat keeps working without
@@ -960,7 +1100,26 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
       logger.warn(`newapi: restoring the chat API key failed: ${describeError(error)}`)
     }
   }
-  void ensureApiKeyStored()
+
+  /**
+   * Startup catalog guard: after the key self-heal had its chance, hide the
+   * route again when the chat API key is still missing, so the model selector
+   * never offers models that would fail with MISSING_CREDENTIAL.
+   */
+  async function hideRouteWhenKeyMissing(): Promise<void> {
+    try {
+      const described = await ctx.credentials.describe(ref)
+      if (described.configured) return
+      await removeRouteFromCatalog('api key missing at startup')
+    } catch (error) {
+      logger.warn(`newapi: startup catalog guard failed: ${describeError(error)}`)
+    }
+  }
+
+  void (async () => {
+    await ensureApiKeyStored()
+    await hideRouteWhenKeyMissing()
+  })()
 
   logger.info(`newapi: ready (route=${route}, apiKeyEnv=${apiKeyEnv})`)
 }
@@ -968,6 +1127,10 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
 interface SnapshotPayload extends NewApiSnapshot {
   baseUrl: string
   server: NewApiServerInfo
+  /** True when this is cached data served while a refresh runs / failed. */
+  stale?: boolean
+  /** Unix ms timestamp of the cached data (present with `stale`). */
+  cachedAt?: number
 }
 
 function readBaseUrl(payload: unknown): string {

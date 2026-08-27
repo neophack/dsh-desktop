@@ -11,7 +11,8 @@
     "dsh-plugin-desktop",
     "dsh-plugin-desktop-beta",
     "dsh-community-fabric",
-    "dsh-community-market"
+    "dsh-community-market",
+    "dsh-plugin-newapi"
   ],
   "resolutions": {
     "app-builder-lib@npm:26.15.7": "patch:app-builder-lib@npm%3A26.15.7#./patches/app-builder-lib@26.15.7.patch",
@@ -532,7 +533,7 @@
     }
   },
   "scripts": {
-    "build": "yarn workspace dsh-community-market build && yarn workspace dsh-plugin-desktop build && yarn workspace dsh-plugin-desktop-beta build",
+    "build": "yarn workspace dsh-plugin-newapi build && yarn workspace dsh-community-market build && yarn workspace dsh-plugin-desktop build && yarn workspace dsh-plugin-desktop-beta build",
     "typecheck": "yarn workspace dsh-plugin-desktop typecheck && yarn workspace dsh-plugin-desktop-beta typecheck && yarn workspace dsh-community-market typecheck",
     "test": "yarn workspace dsh-plugin-desktop test && yarn workspace dsh-plugin-desktop-beta test && yarn workspace dsh-community-market test",
     "test:bilingual-docs": "node --test scripts/bilingual-docs.test.mjs",
@@ -543,13 +544,13 @@
     "check:desktop-variants": "node scripts/verify-desktop-variants.mjs",
     "check:layout": "yarn check:bilingual-docs && yarn check:architecture && yarn check:vendored-runtime && yarn check:desktop-variants && node scripts/verify-layout.mjs",
     "check": "yarn check:layout && yarn workspace dsh-community-fabric check && yarn workspace dsh-community-market check && yarn workspace dsh-plugin-desktop check && yarn workspace dsh-plugin-desktop-beta check",
-    "dev": "yarn workspace dsh-community-market build && yarn workspace dsh-plugin-desktop dev",
+    "dev": "yarn workspace dsh-plugin-newapi build && yarn workspace dsh-community-market build && yarn workspace dsh-plugin-desktop dev",
     "start": "yarn workspace dsh-plugin-desktop start",
-    "package:dir": "yarn workspace dsh-community-market build && yarn workspace dsh-plugin-desktop package:dir",
-    "dist:mac": "yarn workspace dsh-community-market build && yarn workspace dsh-plugin-desktop dist:mac",
-    "dist:mac-smoke": "yarn workspace dsh-community-market build && yarn workspace dsh-plugin-desktop dist:mac-smoke",
-    "dist:win": "yarn workspace dsh-community-market build && yarn workspace dsh-plugin-desktop dist:win",
-    "dist:win-portable": "yarn workspace dsh-community-market build && yarn workspace dsh-plugin-desktop dist:win-portable",
+    "package:dir": "yarn workspace dsh-plugin-newapi build && yarn workspace dsh-community-market build && yarn workspace dsh-plugin-desktop package:dir",
+    "dist:mac": "yarn workspace dsh-plugin-newapi build && yarn workspace dsh-community-market build && yarn workspace dsh-plugin-desktop dist:mac",
+    "dist:mac-smoke": "yarn workspace dsh-plugin-newapi build && yarn workspace dsh-community-market build && yarn workspace dsh-plugin-desktop dist:mac-smoke",
+    "dist:win": "yarn workspace dsh-plugin-newapi build && yarn workspace dsh-community-market build && yarn workspace dsh-plugin-desktop dist:win",
+    "dist:win-portable": "yarn workspace dsh-plugin-newapi build && yarn workspace dsh-community-market build && yarn workspace dsh-plugin-desktop dist:win-portable",
     "upstream:version": "cd deepseek-harness && corepack pnpm --version",
     "upstream:install": "cd deepseek-harness && CI=true corepack pnpm install --frozen-lockfile",
     "upstream:build": "cd deepseek-harness && corepack pnpm run build",

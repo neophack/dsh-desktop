@@ -96,6 +96,14 @@ const ctx = {
       if (ns !== 'llm-pi-ai') throw new Error(`unexpected settings namespace ${ns}`)
       Object.assign(llmSettings, patch)
     },
+    mutate: async (ns, ops) => {
+      if (ns !== 'llm-pi-ai') throw new Error(`unexpected settings namespace ${ns}`)
+      for (const op of ops) {
+        const parent = op.path.slice(0, -1).reduce((node, key) => node?.[key], llmSettings)
+        if (op.op === 'unset') { if (parent !== undefined) delete parent[op.path[op.path.length - 1]] }
+        else if (parent !== undefined) parent[op.path[op.path.length - 1]] = {}
+      }
+    },
   },
   credentials: {
     resolve: async (ref) => (credentialsStore.has(ref.name) ? { value: credentialsStore.get(ref.name) } : undefined),
@@ -162,6 +170,42 @@ try {
   check('status idle after ack', (await status()).status === 'idle')
   const config = await call('config.get')
   check('config.get reports tokenConfigured', config.ok === true && config.value.tokenConfigured === true)
+
+  // 4b. Signing out hides the models: config.clear also removes the key-less
+  //     route from the llm-pi-ai catalog so the chat selector stops offering it.
+  check('config.clear ok', (await call('config.clear')).ok === true)
+  check('config.clear removed the key-less route from the catalog', llmSettings.providers?.newapi === undefined)
+
+  // 4c. Startup guard: a fresh Host boot with a leftover synced route but no
+  //     credentials removes the route again (key-less models stay hidden).
+  {
+    const freshLlm = { providers: { newapi: { displayName: 'NewAPI', baseURL: `${base}/v1`, models: [{ id: 'gpt-x' }] }, other: {} } }
+    const ctx2 = {
+      ...ctx,
+      settings: {
+        ...ctx.settings,
+        get: (ns) => (ns === 'llm-pi-ai' ? freshLlm : undefined),
+        update: async (ns, patch) => { if (ns !== 'llm-pi-ai') throw new Error(`unexpected namespace ${ns}`); Object.assign(freshLlm, patch) },
+        mutate: async (ns, ops) => {
+          for (const op of ops) {
+            const parent = op.path.slice(0, -1).reduce((node, key) => node?.[key], freshLlm)
+            if (op.op === 'unset') { if (parent !== undefined) delete parent[op.path[op.path.length - 1]] }
+          }
+        },
+      },
+      credentials: {
+        ...ctx.credentials,
+        resolve: async () => undefined,
+        describe: async () => ({ configured: false }),
+      },
+      effect: (fn) => { const dispose = fn(); disposers.push(dispose); return () => {} },
+      connection: { rpc: { handle: () => {} } },
+    }
+    await apply(ctx2, { baseUrl: base })
+    await sleep(200)
+    check('startup removed the key-less route (api key missing)', freshLlm.providers?.newapi === undefined)
+    check('startup kept other providers', freshLlm.providers?.other !== undefined)
+  }
 
   // 5. Second flow: user closing the login window surfaces a cancel error.
   await call('login.native.start', { baseUrl: base })

@@ -123,6 +123,33 @@ function looksLikeJwt(value: string): boolean {
 const sharedTransport = {
   lastRequestAt: 0,
   rateLimitedUntil: 0,
+  /** Consecutive 429 strikes; drives the exponential cooldown. */
+  rateLimitStrikes: 0,
+  /**
+   * Shared short-lived bearer: every NewApiClient in this process exchanges
+   * the SAME refresh cookie, so one refresh must serve them all. Per-instance
+   * bearers made each client (snapshot, login-watch, probes) mint its own
+   * token, multiplying /api/user/auth/refresh calls — a CriticalRateLimit
+   * path on new-api servers and the dominant source of plugin-only 429s.
+   */
+  bearer: undefined as string | undefined,
+  bearerExpiresAt: 0,
+}
+
+/** Remaining global rate-limit cooldown in ms (0 when none). */
+export function sharedCooldownRemaining(): number {
+  return Math.max(0, sharedTransport.rateLimitedUntil - Date.now())
+}
+
+/**
+ * Cooldown after a 429: 15s doubling per consecutive strike, capped at 5min,
+   * so a server with a longer limit window than our previous fixed 15s no
+   * longer gets re-hammered the moment the cooldown lapses (the "always 429"
+   * loop). A successful request resets the strikes.
+   */
+function rateLimitCooldownMs(): number {
+  const strikes = Math.min(sharedTransport.rateLimitStrikes, 5)
+  return Math.min(15_000 * 2 ** strikes, 300_000)
 }
 
 export class NewApiClient {
@@ -156,6 +183,10 @@ export class NewApiClient {
     this.cookies.clear()
     this.bearer = undefined
     this.bearerExpiresAt = 0
+    // The shared bearer belongs to the previous credential; drop it so no
+    // sibling client keeps authenticating as the old session.
+    sharedTransport.bearer = undefined
+    sharedTransport.bearerExpiresAt = 0
     this.seedAuthCookie(auth)
   }
 
@@ -251,9 +282,12 @@ export class NewApiClient {
         this.captureCookies(response)
         if (response.status === 429) {
           const retryAfter = Number(response.headers.get('retry-after'))
-          sharedTransport.rateLimitedUntil = Date.now() + (Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 10_000)
+          sharedTransport.rateLimitStrikes += 1
+          const cooldown = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : rateLimitCooldownMs()
+          sharedTransport.rateLimitedUntil = Math.max(sharedTransport.rateLimitedUntil, Date.now() + cooldown)
           throw new NewApiError(`newapi: HTTP 429 for ${path}`, 429)
         }
+        sharedTransport.rateLimitStrikes = 0
         if (!response.ok) {
           let message = `newapi: HTTP ${String(response.status)} for ${path}`
           try {
@@ -383,6 +417,10 @@ export class NewApiClient {
     if (typeof data.access_token === 'string' && looksLikeJwt(data.access_token)) {
       this.bearer = data.access_token
       this.bearerExpiresAt = typeof data.access_expires_at === 'number' ? data.access_expires_at : 0
+      // Publish to the shared slot so sibling clients reuse this bearer
+      // instead of each minting (and rate-limiting) their own.
+      sharedTransport.bearer = this.bearer
+      sharedTransport.bearerExpiresAt = this.bearerExpiresAt
     }
     this.learnUser(data.user)
   }
@@ -391,6 +429,12 @@ export class NewApiClient {
     if (this.auth?.kind === 'token') return Promise.resolve()
     const horizon = Math.floor(Date.now() / 1000) + 60
     if (this.bearer !== undefined && this.bearerExpiresAt > horizon) return Promise.resolve()
+    // Adopt a still-valid bearer another client in this process refreshed.
+    if (sharedTransport.bearer !== undefined && sharedTransport.bearerExpiresAt > horizon) {
+      this.bearer = sharedTransport.bearer
+      this.bearerExpiresAt = sharedTransport.bearerExpiresAt
+      return Promise.resolve()
+    }
     return this.refresh(signal)
   }
 
