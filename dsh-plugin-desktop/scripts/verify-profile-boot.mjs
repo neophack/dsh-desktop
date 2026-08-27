@@ -19,13 +19,21 @@ import { DesktopProfileService } from '../lib/profile-service.js'
 const BIN_NAME = 'dsh-plugin-desktop-profile-smoke'
 const HOST_SERVICE_PLUGIN_NAME = 'dsh-desktop-host-services-smoke-plugin'
 const HOST_SERVICE_PROBE_KEY = 'desktopHostServiceProbe'
+const AUTHENTICATION_TOKEN = Buffer.alloc(32, 4).toString('base64url')
 let ordinaryBrowserEnabled = false
 const BROWSER_ACCESS = Object.freeze({
   get ordinaryBrowserEnabled() { return ordinaryBrowserEnabled },
   rendererHeader: Object.freeze({
     name: 'x-dsh-desktop-renderer',
-    value: Buffer.alloc(32, 2).toString('base64url'),
+    value: AUTHENTICATION_TOKEN,
   }),
+  authenticatedUrl(baseUrl) {
+    const url = new URL(baseUrl)
+    url.pathname = '/'
+    url.search = ''
+    url.searchParams.set('token', AUTHENTICATION_TOKEN)
+    return url.href
+  },
   setOrdinaryBrowserEnabled(enabled) { ordinaryBrowserEnabled = enabled },
 })
 const LAN_HTTPS_SNAPSHOT = Object.freeze({
@@ -253,17 +261,15 @@ try {
   if (profileMenu?.submenu?.()[0]?.label() !== 'desktop') {
     throw new Error('assembled desktop profile is missing the active profile tray submenu')
   }
-  const unauthenticated = await fetch(expectedUrl, {
-    headers: {
-      [BROWSER_ACCESS.rendererHeader.name]: BROWSER_ACCESS.rendererHeader.value,
-    },
-  })
+  const browserRoot = new URL('/', expectedUrl).href
+  const unauthenticated = await fetch(browserRoot)
   await unauthenticated.body?.cancel()
-  if (unauthenticated.status !== 401) {
+  if (unauthenticated.status !== 403) {
     throw new Error(
-      `assembled Web root accepted a renderer without browser authentication: HTTP ${String(unauthenticated.status)}`,
+      `assembled Web root accepted an ordinary browser without authentication: HTTP ${String(unauthenticated.status)}`,
     )
   }
+  BROWSER_ACCESS.setOrdinaryBrowserEnabled(true)
   if (typeof mountedSpec?.authenticationUrl !== 'string') {
     throw new Error('desktop plugin did not provide an authentication URL')
   }
@@ -278,14 +284,9 @@ try {
     || !/^[A-Za-z0-9_-]{43}$/u.test(authenticationTokens[0])) {
     throw new Error(`desktop plugin produced an invalid authentication URL: ${authenticationUrl.href}`)
   }
-  const exchange = await fetch(authenticationUrl, {
-    headers: {
-      [BROWSER_ACCESS.rendererHeader.name]: BROWSER_ACCESS.rendererHeader.value,
-    },
-    redirect: 'manual',
-  })
+  const exchange = await fetch(authenticationUrl, { redirect: 'manual' })
   await exchange.body?.cancel()
-  if (exchange.status !== 303 || exchange.headers.get('location') !== '/') {
+  if (exchange.status !== 302 || exchange.headers.get('location') !== '/') {
     throw new Error(
       `browser authentication exchange returned HTTP ${String(exchange.status)} instead of a root redirect`,
     )
@@ -295,12 +296,7 @@ try {
   if (cookie === undefined || cookie.length === 0) {
     throw new Error('browser authentication exchange did not mint a cookie')
   }
-  const response = await fetch(expectedUrl, {
-    headers: {
-      [BROWSER_ACCESS.rendererHeader.name]: BROWSER_ACCESS.rendererHeader.value,
-      Cookie: cookie,
-    },
-  })
+  const response = await fetch(browserRoot, { headers: { Cookie: cookie } })
   const html = await response.text()
   if (response.status !== 200) {
     throw new Error(`assembled Web root returned HTTP ${String(response.status)}`)

@@ -217,6 +217,48 @@ describe('Desktop startup recovery confirmations', () => {
     expect(states[0]!.notice).toEqual({ tone: 'success', title: 'slot-1', body: 'restored' })
     expect(states[1]!.notice).toBeUndefined()
   })
+
+  it('refreshes and marks restart ready after the Profile creator selects a new Profile', async () => {
+    let selected = 'desktop'
+    const profileActions = {
+      token: 'profile-action-token',
+      list: () => ['desktop', 'fresh'].map(name => ({
+        name,
+        current: name === selected,
+        selectable: true,
+      })),
+      switchProfile: vi.fn(),
+      openCreator: vi.fn(async () => { selected = 'fresh' }),
+    }
+    const recovery = new DesktopStartupRecoveryWindow({
+      locale: 'zh',
+      failureStage: 'profile-selection',
+      failureDetail: 'Profile compatibility warning',
+      profileActions,
+      exportDiagnostics: async () => '/tmp/diagnostics.zip',
+    })
+    const loadFile = vi.fn(async (
+      _path: string,
+      _options: { readonly query: { readonly state: string } },
+    ) => {})
+    const privateRecovery = recovery as unknown as {
+      window: { isDestroyed(): boolean; loadFile: typeof loadFile }
+      profiles: ReturnType<typeof profileActions.list>
+      handleAction(action: { readonly action: string }): Promise<void>
+    }
+    privateRecovery.window = { isDestroyed: () => false, loadFile }
+    privateRecovery.profiles = profileActions.list()
+
+    await privateRecovery.handleAction({ action: 'open-profile-creator' })
+
+    const state = JSON.parse(Buffer.from(loadFile.mock.calls.at(-1)![1].query.state, 'base64url').toString('utf8')) as {
+      readonly restartReady: boolean
+      readonly profiles: readonly { readonly name: string; readonly current: boolean }[]
+    }
+    expect(profileActions.openCreator).toHaveBeenCalledOnce()
+    expect(state.restartReady).toBe(true)
+    expect(state.profiles.find(profile => profile.current)?.name).toBe('fresh')
+  })
 })
 
 describe('Desktop startup recovery diagnostics export', () => {

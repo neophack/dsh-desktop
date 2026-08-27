@@ -1,17 +1,22 @@
 import {
   AlertTriangle, Archive, FilePenLine, FolderOpen, History, LifeBuoy,
-  PackageX, Plug, Plus, Power, RefreshCw, RotateCcw, Stethoscope, Terminal, Users,
+  PackageX, Plug, Power, RefreshCw, RotateCcw, Stethoscope, Terminal, Users,
 } from 'lucide-react'
-import { useEffect, type ReactNode } from 'react'
-import { toast } from 'sonner'
+import type { ReactNode } from 'react'
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert.tsx'
-import { buttonVariants } from '../components/ui/button.tsx'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '../components/ui/card.tsx'
 import { ScrollArea } from '../components/ui/scroll-area.tsx'
-import { Toaster } from '../components/ui/sonner.tsx'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs.tsx'
 import { cn } from '../lib/utils.ts'
 import { DesktopFrame, desktopFrameIsVisible } from '../shared/DesktopFrame.tsx'
+import { DesktopProfileSelector } from '../shared/ProfileSelector.tsx'
+import {
+  RecoveryActionFooter,
+  RecoveryActionLink,
+  RecoveryNoticeSurface,
+  type RecoveryActionVariant,
+  type RecoveryNotice,
+} from '../shared/RecoveryWindowPrimitives.tsx'
 import {
   desktopRecoveryCopy,
   type DesktopRecoveryCopy,
@@ -25,7 +30,6 @@ const SCHEME = 'dsh-recovery:'
 interface RecoveryBundle { readonly bundleId: string; readonly packageName: string; readonly status: 'active' | 'disabled'; readonly owner: 'core' | 'profile' | 'external'; readonly action: 'uninstall' | null }
 interface RecoveryCheckpoint { readonly slotId: 'slot-1' | 'slot-2' | 'slot-3'; readonly status: 'available' | 'empty'; readonly capturedAt?: string; readonly appVersion?: string; readonly provider?: string; readonly fileCount?: number; readonly pluginCount?: number; readonly totalBytes?: number }
 interface RecoverySnapshot { readonly profileName: string; readonly bundles: readonly RecoveryBundle[]; readonly checkpoints: readonly RecoveryCheckpoint[] }
-interface RecoveryNotice { readonly tone: 'info' | 'success' | 'warning' | 'error'; readonly title: string; readonly body: string }
 interface RecoveryProfile { readonly name: string; readonly current: boolean; readonly selectable: boolean }
 interface RecoveryState {
   readonly locale: DesktopLocale
@@ -59,17 +63,7 @@ function decodeState(): RecoveryState | undefined {
 }
 function fallbackLocale(): DesktopLocale { return new URLSearchParams(window.location.search).get('locale') === 'zh' ? 'zh' : 'en' }
 function href(action: string, id?: string, name?: string): string { const url = new URL(`${SCHEME}//${action}`); if (id !== undefined) url.searchParams.set('id', id); if (name !== undefined) url.searchParams.set('name', name); return url.href }
-function Action({ action, children, className, icon, id, name, variant = 'outline' }: { readonly action: string; readonly children: ReactNode; readonly className?: string; readonly icon?: ReactNode; readonly id?: string; readonly name?: string; readonly variant?: 'default' | 'outline' | 'secondary' | 'destructive' }): JSX.Element { return <a className={cn(buttonVariants({ variant }), className)} href={href(action, id, name)}>{icon}{children}</a> }
-function RecoveryNoticeToast({ notice }: { readonly notice: RecoveryNotice }): null {
-  useEffect(() => {
-    const options = { id: 'dsh-recovery-notice', description: notice.body, duration: 8_000 }
-    if (notice.tone === 'success') toast.success(notice.title, options)
-    else if (notice.tone === 'warning') toast.warning(notice.title, options)
-    else if (notice.tone === 'error') toast.error(notice.title, options)
-    else toast.info(notice.title, options)
-  }, [notice.body, notice.title, notice.tone])
-  return null
-}
+function Action({ action, children, className, icon, id, name, variant = 'outline' }: { readonly action: string; readonly children: ReactNode; readonly className?: string; readonly icon?: ReactNode; readonly id?: string; readonly name?: string; readonly variant?: RecoveryActionVariant }): JSX.Element { return <RecoveryActionLink className={className} href={href(action, id, name)} icon={icon} variant={variant}>{children}</RecoveryActionLink> }
 function PanelScroll({ children }: { readonly children: ReactNode }): JSX.Element { return <ScrollArea className="h-full pr-3"><div className="space-y-4 pb-2 pt-4">{children}</div></ScrollArea> }
 
 function PluginsPanel({ copy, state }: { readonly copy: DesktopRecoveryCopy; readonly state: RecoveryState }): JSX.Element {
@@ -100,8 +94,19 @@ function RollbackPanel({ copy, state }: { readonly copy: DesktopRecoveryCopy; re
 }
 function ProfilesPanel({ copy, state }: { readonly copy: DesktopRecoveryCopy; readonly state: RecoveryState }): JSX.Element {
   if (state.profiles === undefined) return <PanelScroll><Alert variant="destructive"><AlertTriangle /><AlertTitle>{copy.profiles}</AlertTitle><AlertDescription>{copy.profilesUnavailable}</AlertDescription></Alert></PanelScroll>
-  const hasAlternative = state.profiles.some(profile => !profile.current && profile.selectable)
-  return <PanelScroll><Card><CardHeader><CardTitle>{copy.profiles}</CardTitle><CardDescription>{copy.profilesBody}</CardDescription></CardHeader><CardContent className="divide-y p-0">{state.profiles.map(profile => <div className="flex items-center justify-between gap-4 px-6 py-3" key={profile.name}><span className="min-w-0 truncate text-sm font-medium">{profile.name}</span>{profile.current ? <span className="rounded-full bg-muted px-2 py-1 text-xs">{copy.currentProfile}</span> : profile.selectable && state.profileActionToken !== undefined ? <Action action="switch-profile" id={state.profileActionToken} name={profile.name}>{copy.switchProfile}</Action> : null}</div>)}{hasAlternative ? null : <p className="px-6 py-5 text-sm text-muted-foreground">{copy.profilesEmpty}</p>}</CardContent>{state.profileCreatorAvailable ? <CardFooter className="justify-end pt-6"><Action action="open-profile-creator" icon={<Plus />}>{copy.addProfile}</Action></CardFooter> : null}</Card></PanelScroll>
+  return <PanelScroll><DesktopProfileSelector
+    profiles={state.profiles}
+    labels={{
+      title: copy.profiles,
+      description: copy.profilesBody,
+      current: copy.currentProfile,
+      select: copy.switchProfile,
+      empty: copy.profilesEmpty,
+      create: copy.addProfile,
+    }}
+    selectHref={name => state.profileActionToken === undefined ? undefined : href('switch-profile', state.profileActionToken, name)}
+    {...(state.profileCreatorAvailable ? { createHref: href('open-profile-creator') } : {})}
+  /></PanelScroll>
 }
 function DiagnosticsPanel({ copy, state }: { readonly copy: DesktopRecoveryCopy; readonly state: RecoveryState }): JSX.Element {
   return <PanelScroll><Card><CardHeader><CardTitle>{copy.diagnostics}</CardTitle><CardDescription>{state.diagnostics.status === 'saving' ? copy.savingDiagnostics : state.diagnostics.status === 'saved' ? copy.diagnosticsSaved : copy.diagnosticsFailed}</CardDescription></CardHeader><CardContent className="space-y-2">{state.diagnostics.filename === undefined ? null : <code className="block break-all rounded-lg bg-muted p-3 text-xs">{state.diagnostics.filename}</code>}<p className="text-xs text-muted-foreground">{copy.privacy}</p></CardContent><CardFooter className="flex-wrap justify-end gap-2"><Action action={state.diagnostics.status === 'saved' ? 'show-diagnostics' : 'export-diagnostics'} icon={<Archive />}>{state.diagnostics.status === 'saved' ? copy.showDiagnostics : copy.saveDiagnostics}</Action></CardFooter></Card>{state.configurationAvailable ? <Card><CardHeader><CardTitle>{copy.configurationFiles}</CardTitle><CardDescription>{copy.configurationFilesBody}</CardDescription></CardHeader><CardFooter className="flex-wrap gap-2 pt-6"><Action action="open-settings-document" icon={<FilePenLine />}>{copy.openSettingsDocument}</Action><Action action="open-profile-patch" icon={<FilePenLine />}>{copy.openProfilePatch}</Action><Action action="open-profile-manifest" icon={<FilePenLine />}>{copy.openProfileManifest}</Action><Action action="open-profile-directory" icon={<FolderOpen />}>{copy.openProfileDirectory}</Action></CardFooter></Card> : null}</PanelScroll>
@@ -133,5 +138,5 @@ export function RecoveryApp(): JSX.Element {
     return <><DesktopFrame /><main className="dshNativeContent flex h-screen items-center justify-center p-6"><Alert variant="destructive"><AlertTriangle /><AlertTitle>{copy.title}</AlertTitle><AlertDescription>{copy.fallbackBody}</AlertDescription></Alert></main></>
   }
   const copy = desktopRecoveryCopy(state.locale)
-  return <><DesktopFrame />{state.terminalAvailable ? <RecoveryTerminalAction busy={state.busy} copy={copy} search={window.location.search} /> : null}<main className={cn('dshNativeContent h-screen overflow-hidden p-5 sm:p-6', state.busy && 'pointer-events-none opacity-70')}><div className="mx-auto flex h-full w-full max-w-5xl flex-col gap-4"><Reason copy={copy} state={state} /><Tabs defaultValue={state.activeTab}><TabsList className="w-full justify-start overflow-x-auto"><TabsTrigger value="plugins"><Plug />{copy.tabs.plugins}</TabsTrigger><TabsTrigger value="rollback"><History />{copy.tabs.rollback}</TabsTrigger><TabsTrigger value="profiles"><Users />{copy.tabs.profiles}</TabsTrigger><TabsTrigger value="diagnostics"><Stethoscope />{copy.tabs.diagnostics}</TabsTrigger></TabsList><TabsContent value="plugins"><PluginsPanel copy={copy} state={state} /></TabsContent><TabsContent value="rollback"><RollbackPanel copy={copy} state={state} /></TabsContent><TabsContent value="profiles"><ProfilesPanel copy={copy} state={state} /></TabsContent><TabsContent value="diagnostics"><DiagnosticsPanel copy={copy} state={state} /></TabsContent></Tabs><footer className="flex shrink-0 flex-wrap justify-end gap-2 border-t pt-4">{state.busy ? <span className="mr-auto inline-flex items-center gap-2 text-sm text-muted-foreground"><RefreshCw className="size-4 animate-spin" />{copy.working}</span> : null}<Action action="restart" icon={<RotateCcw />} variant={state.restartReady ? 'default' : 'outline'}>{copy.restart}</Action><Action action="quit" icon={<Power />}>{copy.quit}</Action></footer></div></main>{state.notice === undefined ? null : <RecoveryNoticeToast notice={state.notice} />}<Toaster closeButton offset={{ top: 52, right: 24 }} position="top-right" richColors /></>
+  return <><DesktopFrame />{state.terminalAvailable ? <RecoveryTerminalAction busy={state.busy} copy={copy} search={window.location.search} /> : null}<main className={cn('dshNativeContent h-screen overflow-hidden p-5 sm:p-6', state.busy && 'pointer-events-none opacity-70')}><div className="mx-auto flex h-full w-full max-w-5xl flex-col gap-4"><Reason copy={copy} state={state} /><Tabs defaultValue={state.activeTab}><TabsList className="w-full justify-start overflow-x-auto"><TabsTrigger value="plugins"><Plug />{copy.tabs.plugins}</TabsTrigger><TabsTrigger value="rollback"><History />{copy.tabs.rollback}</TabsTrigger><TabsTrigger value="profiles"><Users />{copy.tabs.profiles}</TabsTrigger><TabsTrigger value="diagnostics"><Stethoscope />{copy.tabs.diagnostics}</TabsTrigger></TabsList><TabsContent value="plugins"><PluginsPanel copy={copy} state={state} /></TabsContent><TabsContent value="rollback"><RollbackPanel copy={copy} state={state} /></TabsContent><TabsContent value="profiles"><ProfilesPanel copy={copy} state={state} /></TabsContent><TabsContent value="diagnostics"><DiagnosticsPanel copy={copy} state={state} /></TabsContent></Tabs><RecoveryActionFooter leading={state.busy ? <span className="inline-flex items-center gap-2 text-sm text-muted-foreground"><RefreshCw className="size-4 animate-spin" />{copy.working}</span> : undefined}><Action action="restart" icon={<RotateCcw />} variant={state.restartReady ? 'default' : 'outline'}>{copy.restart}</Action><Action action="quit" icon={<Power />}>{copy.quit}</Action></RecoveryActionFooter></div></main><RecoveryNoticeSurface notice={state.notice} /></>
 }

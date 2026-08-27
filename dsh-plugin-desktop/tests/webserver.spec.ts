@@ -4,8 +4,10 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import {
   createDesktopBrowserAccess,
+  DESKTOP_BROWSER_ACCESS_COOKIE,
   type DesktopBrowserAccess,
 } from '../src/desktop-browser-access.ts'
+import { DESKTOP_WEB_PORT_RETRY_LIMIT } from '../src/desktop-port.ts'
 import DesktopWebServer from '../src/webserver.ts'
 
 const occupied: Server[] = []
@@ -84,7 +86,9 @@ describe('Desktop WebServer port policy', () => {
 
     await context.plugin(DesktopWebServer, { host: '127.0.0.1', port: blocked.port })
 
-    expect(context.get('webServer')?.port).toBe(blocked.port + 1)
+    const selectedPort = context.get('webServer')?.port ?? 0
+    expect(selectedPort).toBeGreaterThan(blocked.port)
+    expect(selectedPort).toBeLessThanOrEqual(blocked.port + DESKTOP_WEB_PORT_RETRY_LIMIT)
   })
 
   it('preserves an OS-assigned port when the explicit value is zero', async () => {
@@ -141,10 +145,20 @@ describe('Desktop WebServer browser gate', () => {
     server.registerFallback((_req, res) => { res.end('browser') })
     const root = `http://127.0.0.1:${String(server.port)}`
 
-    const browser = await fetch(`${root}/?workspace=one`)
+    expect((await fetch(`${root}/?workspace=one`)).status).toBe(403)
+    const bootstrap = await fetch(access.authenticatedUrl(root), { redirect: 'manual' })
+    expect(bootstrap.status).toBe(302)
+    expect(bootstrap.headers.get('location')).toBe('/')
+    const setCookie = bootstrap.headers.get('set-cookie')
+    expect(setCookie).toContain(`${DESKTOP_BROWSER_ACCESS_COOKIE}=${access.rendererHeader.value}`)
+    expect(setCookie).toContain('HttpOnly')
+    expect(setCookie).toContain('SameSite=Strict')
+    const cookie = setCookie?.split(';', 1)[0]
+    if (cookie === undefined) throw new Error('browser bootstrap did not return a cookie')
+    const browser = await fetch(`${root}/?workspace=one`, { headers: { cookie } })
     expect(browser.status).toBe(200)
     await expect(browser.text()).resolves.toBe('browser')
-    const forged = await fetch(`${root}/?dsh-desktop-mode=compatibility`)
+    const forged = await fetch(`${root}/?dsh-desktop-mode=compatibility`, { headers: { cookie } })
     expect(forged.status).toBe(403)
     expect(forged.headers.get('cache-control')).toBe('no-store')
   })

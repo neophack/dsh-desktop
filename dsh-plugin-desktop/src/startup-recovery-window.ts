@@ -351,7 +351,18 @@ export class DesktopStartupRecoveryWindow {
       } else if (action.action === 'open-profile-creator') {
         this.activeTab = 'profiles'
         if (this.options.profileActions === undefined) throw new Error('Profile creation is unavailable for this startup stage.')
+        const previousCurrent = this.profiles?.find(profile => profile.current)?.name
         await this.options.profileActions.openCreator()
+        this.refreshProfiles()
+        const selected = this.profiles?.find(profile => profile.current)?.name
+        if (selected !== undefined && selected !== previousCurrent) {
+          this.notice = {
+            tone: 'success',
+            title: selected,
+            body: copy.profileSelectedSuccess,
+          }
+          this.restartReady = true
+        }
       } else if (action.action === 'switch-profile' && action.id !== undefined && action.name !== undefined) {
         this.activeTab = 'profiles'
         const actions = this.options.profileActions

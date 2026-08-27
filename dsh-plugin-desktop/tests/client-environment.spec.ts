@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { createElement, type ReactNode } from 'react'
+import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
@@ -69,7 +69,7 @@ describe('advanced desktop layout', () => {
   it.each([
     ['advanced', AdvancedFrame],
     ['extended', ExtendedFrame],
-  ] as const)('binds the strict details slot through SessionProvider in %s mode', (_mode, Frame) => {
+  ] as const)('renders the RC2 details slot directly in %s mode', (_mode, Frame) => {
     vi.stubGlobal('window', { innerWidth: 1440 })
     const props = {
       layout: new DesktopLayoutState(),
@@ -77,15 +77,12 @@ describe('advanced desktop layout', () => {
       useSessions: (select: (state: { current?: string; byId: Record<string, { blank: boolean }> }) => unknown) =>
         select({ byId: {} }),
       renderSlot: (name: string) => createElement('span', { 'data-slot': name }),
-      SessionProvider: ({ children }: { children: ReactNode }) =>
-        createElement('section', { 'data-session-provider': '' }, children),
     } as unknown as AdvancedFrameProps
 
     try {
       const markup = renderToStaticMarkup(createElement(Frame, props))
-      expect(markup).toContain(
-        '<section data-session-provider=""><span data-slot="details"></span></section>',
-      )
+      expect(markup).toContain('<span data-slot="details"></span>')
+      expect(markup).not.toContain('data-session-provider')
     } finally {
       vi.unstubAllGlobals()
     }

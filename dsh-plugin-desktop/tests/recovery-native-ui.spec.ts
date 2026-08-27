@@ -2,6 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { RecoveryTerminalAction } from '../src/native-ui/recovery/App.tsx'
+import { RecoveryActionFooter, RecoveryActionLink } from '../src/native-ui/shared/RecoveryWindowPrimitives.tsx'
 import { desktopRecoveryCopy } from '../src/recovery-copy.ts'
 
 describe('Recovery native terminal action', () => {
@@ -37,5 +38,23 @@ describe('Recovery native terminal action', () => {
       copy,
       search: '?frame=true&platform=linux',
     }))).toBe('')
+  })
+
+  it('shares the Recovery footer layout while keeping a leading action on the left', () => {
+    const markup = renderToStaticMarkup(createElement(
+      RecoveryActionFooter,
+      {
+        leading: createElement(RecoveryActionLink, { children: 'Back', href: 'dsh-profile-selector://cancel' }),
+        children: createElement(RecoveryActionLink, {
+          children: 'Restart DSH Desktop',
+          href: 'dsh-profile-selector://restart',
+          variant: 'default',
+        }),
+      },
+    ))
+
+    expect(markup).toContain('mr-auto')
+    expect(markup).toContain('dsh-profile-selector://cancel')
+    expect(markup).toContain('dsh-profile-selector://restart')
   })
 })

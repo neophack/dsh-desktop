@@ -9,7 +9,6 @@ import { evaluate, isJsExpr, type EntryOptions } from '@deepseek-ai/cordis-plugi
 import type { PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import {
   composeEntries,
-  DEFAULT_PROFILE_PATCH_RELOAD,
   healProfilesModuleFallback,
   initProfile,
   loadOptionalPatches,
@@ -21,7 +20,6 @@ import {
   writeProfileManifest,
   type Profile,
   type ProfileManifest,
-  type ProfilePatchReload,
 } from '@deepseek-ai/dsh-app-boot'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import FileSettingsProvider, {
@@ -41,6 +39,10 @@ import {
   type DesktopNetworkExposure,
 } from './desktop-network.ts'
 import type { DesktopShellMode } from './runtime.ts'
+import {
+  DESKTOP_PACKAGE_NAME,
+  DESKTOP_PACKAGE_NAMES,
+} from './product-identity.ts'
 import {
   DEFAULT_MACOS_WINDOW_MATERIAL,
   DEFAULT_WINDOWS_WINDOW_MATERIAL,
@@ -65,7 +67,7 @@ import {
 export const DESKTOP_PROFILE_NAME = 'desktop'
 
 /** Standalone package name inserted through the launcher-owned desktop layer. */
-export const DESKTOP_PACKAGE_NAME = 'dsh-plugin-desktop'
+export { DESKTOP_PACKAGE_NAME } from './product-identity.ts'
 
 /** Empty include root rewritten before every profile boot. */
 export const DESKTOP_PROFILE_ROOT = 'cordis.yml'
@@ -86,12 +88,12 @@ const BROWSE_PICKER_SURFACE = '@deepseek-ai/dsh-client-ui-directory-picker-brows
 const PWSH_SANDBOX_ROW_ID = 'pwsh-sandbox'
 const UPSTREAM_PWSH_SANDBOX_PACKAGE = '@deepseek-ai/dsh-pwsh-sandbox'
 const DESKTOP_WINDOWS_PWSH_SANDBOX_ROW_ID = 'desktop-windows-pwsh-sandbox'
-const DESKTOP_WINDOWS_PWSH_SANDBOX_PACKAGE = 'dsh-plugin-desktop/windows-pwsh-sandbox'
+const DESKTOP_WINDOWS_PWSH_SANDBOX_PACKAGE = `${DESKTOP_PACKAGE_NAME}/windows-pwsh-sandbox`
 const AGENT_PRESETS_ROW_ID = 'agent-presets'
 const DEFAULT_DESKTOP_SHELL_MODE: DesktopShellMode = 'compatibility'
 const DEFAULT_DESKTOP_PORT = DESKTOP_DEFAULT_WEB_PORT
 const DESKTOP_WEB_SERVER_ROW_ID = 'desktop-webserver'
-const DESKTOP_WEB_SERVER_PACKAGE = 'dsh-plugin-desktop/webserver'
+const DESKTOP_WEB_SERVER_PACKAGE = `${DESKTOP_PACKAGE_NAME}/webserver`
 const SETTINGS_FILE_PACKAGE = '@deepseek-ai/dsh-settings-file'
 const DESKTOP_SETTINGS_NAMESPACE = 'dsh-desktop'
 const UI_LAYOUT_PACKAGE = '@deepseek-ai/dsh-client-ui-layout'
@@ -228,16 +230,7 @@ function requiredWebBundles(): string[] {
   if (template === undefined) {
     throw new Error(`${BIN_NAME}: installed dsh-app-boot has no web profile template`)
   }
-  return [...template.bundles]
-}
-
-/** User patch lifecycle inherited from the matching upstream Web profile. */
-function requiredWebPatchReload(): ProfilePatchReload {
-  const template = PROFILE_TEMPLATES.web
-  if (template === undefined) {
-    throw new Error(`${BIN_NAME}: installed dsh-app-boot has no web profile template`)
-  }
-  return template.patchReload
+  return [...template]
 }
 
 /** Prepared profile inputs consumed by app-boot. */
@@ -302,7 +295,7 @@ export interface SkippedOptionalEntry {
 export function desktopBundleList(current: readonly string[]): string[] {
   const thirdParty = current.filter(name => !REQUIRED_BUNDLE_SET.has(name)
     && !DESKTOP_DEFAULT_BUNDLE_SET.has(name)
-    && name !== DESKTOP_PACKAGE_NAME
+    && !DESKTOP_PACKAGE_NAMES.has(name)
     && !OBSOLETE_DESKTOP_BUNDLE_SET.has(name))
   return [...REQUIRED_BUNDLES, ...DESKTOP_DEFAULT_BUNDLES, ...thirdParty]
 }
@@ -320,7 +313,7 @@ function sameList(left: readonly string[], right: readonly string[]): boolean {
 export function ensureDesktopProfile(home: string = resolveDshHome()): string {
   const dir = resolveProfileDir(DESKTOP_PROFILE_NAME, home)
   if (!existsSync(join(dir, 'package.json'))) {
-    initProfile(dir, REQUIRED_BUNDLES, requiredWebPatchReload())
+    initProfile(dir, REQUIRED_BUNDLES)
   }
   const manifest = readProfileManifest(BIN_NAME, dir)
   const rawBundles = (manifest.dsh?.profile as { bundles?: unknown } | undefined)?.bundles
@@ -330,8 +323,7 @@ export function ensureDesktopProfile(home: string = resolveDshHome()): string {
   }
   const current = rawBundles === undefined ? [] : rawBundles as string[]
   const bundles = desktopBundleList(current)
-  const patchReload = requiredWebPatchReload()
-  if (!sameList(current, bundles) || manifest.dsh?.profile?.patchReload !== patchReload) {
+  if (!sameList(current, bundles)) {
     writeProfileManifest(dir, {
       ...manifest,
       dsh: {
@@ -339,7 +331,6 @@ export function ensureDesktopProfile(home: string = resolveDshHome()): string {
         profile: {
           ...manifest.dsh?.profile,
           bundles,
-          patchReload,
         },
       },
     })
@@ -473,7 +464,7 @@ function loadRecoveryFilteredProfile(
     if (template === undefined) {
       throw new Error(`${BIN_NAME}: profile ${JSON.stringify(profileName)} does not exist`)
     }
-    initProfile(profileDir, template.bundles, template.patchReload)
+    initProfile(profileDir, template)
   }
   const manifest = readProfileManifest(BIN_NAME, profileDir)
   const rawBundles = (manifest.dsh?.profile as { bundles?: unknown } | undefined)?.bundles
@@ -482,11 +473,6 @@ function loadRecoveryFilteredProfile(
     throw new Error(`${BIN_NAME}: dsh.profile.bundles must be an array of package names`)
   }
   const bundles = (rawBundles ?? []) as string[]
-  const rawPatchReload: unknown = manifest.dsh?.profile?.patchReload
-  if (rawPatchReload !== undefined && rawPatchReload !== 'live' && rawPatchReload !== 'startup') {
-    throw new Error(`${BIN_NAME}: dsh.profile.patchReload must be "live" or "startup"`)
-  }
-  const patchReload = rawPatchReload ?? PROFILE_TEMPLATES[profileName]?.patchReload ?? DEFAULT_PROFILE_PATCH_RELOAD
   const selectedBundles = bundles.filter(packageName =>
     packageName !== DESKTOP_MARKET_IDENTITIES.community.packageName
     && (marketProvider === DESKTOP_MARKET_IDENTITIES.dshMarket.provider
@@ -540,7 +526,6 @@ function loadRecoveryFilteredProfile(
       layers,
       patchPath,
       patches: existsSync(patchPath) ? loadOverlayPatches(BIN_NAME, patchPath) : [],
-      patchReload,
     },
     ...(dshMarketFailure === undefined ? {} : { dshMarketFailure }),
   }
@@ -550,7 +535,7 @@ function loadRecoveryFilteredProfile(
 export function shippedPresetRoot(moduleUrl: string = import.meta.url): string {
   const require = createRequire(moduleUrl)
   return unpackedAsarPath(
-    join(dirname(require.resolve('@deepseek-ai/dsh-agent-presets/package.json')), 'presets'),
+    join(dirname(require.resolve('@deepseek-ai/dsh/package.json')), 'config', 'agent-presets'),
   )
 }
 
@@ -1113,12 +1098,8 @@ export function prepareDesktopProfile(
 }
 
 /** Maintain the upstream module fallback for one fully resolved Desktop profile. */
-export function healDesktopProfileModuleFallback(home: string, profile?: Profile): Promise<void> {
-  return healProfilesModuleFallback({
-    installAnchor: INSTALL_ANCHOR,
-    home,
-    ...(profile === undefined ? {} : { profile }),
-  })
+export async function healDesktopProfileModuleFallback(home: string, _profile?: Profile): Promise<void> {
+  healProfilesModuleFallback(INSTALL_ANCHOR, home)
 }
 
 /** Expose the package anchor for focused resolution tests. */

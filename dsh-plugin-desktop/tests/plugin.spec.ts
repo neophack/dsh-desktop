@@ -1,10 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
-import type {
-  ConnectionRequestRejection,
-  ConnectionTrustRequest,
-} from '@deepseek-ai/dsh-client-connection'
 import type { LocaleId } from '@deepseek-ai/dsh-client-locale'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { ThemePreference } from '@deepseek-ai/dsh-client-ui-theme'
@@ -24,20 +20,6 @@ import {
   DESKTOP_DIRECTORY_PICKER_PATH,
   DESKTOP_DIRECTORY_VALIDATOR_PATH,
 } from '../src/directory-picker-contract.ts'
-import {
-  DESKTOP_DEVELOPER_TOOLS_TOGGLE_PATH,
-  DESKTOP_DIAGNOSTICS_EXPORT_PATH,
-  DESKTOP_MARKET_SELECT_PATH,
-  DESKTOP_PROFILE_CREATE_PATH,
-  DESKTOP_PROFILE_CREATE_WINDOW_PATH,
-  DESKTOP_PROFILE_DELETE_PATH,
-  DESKTOP_PROFILE_SELECT_PATH,
-  DESKTOP_RECOVERY_RESTART_PATH,
-  DESKTOP_RENDERER_RELOAD_PATH,
-  DESKTOP_RESTART_PATH,
-  DESKTOP_SETTINGS_PATH,
-  DESKTOP_TERMINAL_OPEN_PATH,
-} from '../src/desktop-settings-contract.ts'
 import type { DesktopRuntime, DesktopShellSpec } from '../src/runtime.ts'
 import { createDesktopBrowserAccess } from '../src/desktop-browser-access.ts'
 import { DesktopLanHttpsRuntime } from '../src/lan-https-runtime.ts'
@@ -71,7 +53,6 @@ interface PluginHarness {
   browserAccess: ReturnType<typeof createDesktopBrowserAccess>
   lanHttps: DesktopLanHttpsRuntime
   setLanHttpsEnabled: ReturnType<typeof vi.fn<DesktopLanHttpsRuntime['setEnabled']>>
-  requestRejection: ReturnType<typeof vi.fn<(request: ConnectionTrustRequest) => ConnectionRequestRejection>>
   route(path: string): WebRoute | undefined
   routes(): readonly WebRoute[]
   notify(next: DesktopSettings, prev: DesktopSettings): Promise<void>
@@ -92,9 +73,6 @@ function createHarness(
   const rendererBoot = vi.fn<(report: RendererBootReport) => void>()
   const pickDirectory = vi.fn(async () => null)
   const validateDirectory = vi.fn(async () => true)
-  const requestRejection = vi.fn<(
-    request: ConnectionTrustRequest,
-  ) => ConnectionRequestRejection>(() => undefined)
   const routes = new Map<string, WebRoute>()
   const settingsUpdated = new Set<(namespace: unknown, next: unknown) => void>()
   let localePreference: LocaleId | undefined
@@ -105,12 +83,6 @@ function createHarness(
   )
   const lanHttps = new DesktopLanHttpsRuntime({ addresses: [] })
   const setLanHttpsEnabled = vi.spyOn(lanHttps, 'setEnabled')
-  const authenticatedUrl = vi.fn((baseUrl: string) => {
-    const url = new URL(baseUrl)
-    url.pathname = '/'
-    url.search = 'token=test-token'
-    return url.href
-  })
   const runtime: DesktopRuntime = {
     platform,
     windowsBuild: platform === 'win32' ? 22_631 : undefined,
@@ -183,7 +155,7 @@ function createHarness(
       }),
     },
     settings,
-    connection: { authenticatedUrl, requestRejection },
+    connection: {},
     logger: { warn: vi.fn(), error: vi.fn() },
     get: vi.fn((key: unknown) => {
       if (String(key) === 'desktopRuntime') return runtime
@@ -211,7 +183,6 @@ function createHarness(
     browserAccess,
     lanHttps,
     setLanHttpsEnabled,
-    requestRejection,
     route: path => routes.get(path),
     routes: () => [...routes.values()],
     notify: async (next, prev) => { await watcher?.(next, prev) },
@@ -321,7 +292,7 @@ describe('desktop Host plugin', () => {
     expect(harness.shell()).toEqual(expect.objectContaining({
       mode: 'compatibility',
       url: 'http://127.0.0.1:43120/?dsh-desktop-mode=compatibility&dsh-desktop-platform=darwin&dsh-desktop-version=2.0.0&dsh-desktop-material=transparent&dsh-desktop-titlebar-inset=36',
-      authenticationUrl: 'http://127.0.0.1:43120/?token=test-token',
+      authenticationUrl: harness.browserAccess.authenticatedUrl('http://127.0.0.1:43120'),
       productName: 'DSH Desktop',
       windowTitle: 'DeepSeek Harness Desktop',
       rendererAccessHeader: {
@@ -375,56 +346,8 @@ describe('desktop Host plugin', () => {
 
     await route?.handler(req, res)
 
-    expect(harness.requestRejection).toHaveBeenCalledWith(req)
     expect(harness.rendererBoot).toHaveBeenCalledWith(report)
     expect(res.statusCode).toBe(204)
-  })
-
-  it.each([
-    [401, 'unauthorized'],
-    [403, 'forbidden'],
-  ] as const)('applies the Connection %i rejection before every private exact route', async (
-    status,
-    body,
-  ) => {
-    const harness = createHarness('win32')
-    harness.requestRejection.mockReturnValue(status)
-    apply(harness.ctx, config)
-    const expectedPaths = [
-      DESKTOP_SETTINGS_PATH,
-      DESKTOP_PROFILE_CREATE_PATH,
-      DESKTOP_PROFILE_CREATE_WINDOW_PATH,
-      DESKTOP_PROFILE_DELETE_PATH,
-      DESKTOP_PROFILE_SELECT_PATH,
-      DESKTOP_MARKET_SELECT_PATH,
-      DESKTOP_TERMINAL_OPEN_PATH,
-      DESKTOP_RESTART_PATH,
-      DESKTOP_RECOVERY_RESTART_PATH,
-      DESKTOP_RENDERER_RELOAD_PATH,
-      DESKTOP_DEVELOPER_TOOLS_TOGGLE_PATH,
-      DESKTOP_DIAGNOSTICS_EXPORT_PATH,
-      RENDERER_BOOT_REPORT_PATH,
-      DESKTOP_DIRECTORY_PICKER_PATH,
-      DESKTOP_DIRECTORY_VALIDATOR_PATH,
-    ].sort()
-    const routes = harness.routes()
-    expect(routes.map(route => route.path).sort()).toEqual(expectedPaths)
-
-    for (const route of routes) {
-      const req = { headers: {} } as IncomingMessage
-      const writeHead = vi.fn()
-      const end = vi.fn()
-      const res = { writeHead, end } as unknown as ServerResponse
-
-      await route.handler(req, res)
-
-      expect(writeHead).toHaveBeenCalledWith(status)
-      expect(end).toHaveBeenCalledWith(body)
-    }
-    expect(harness.requestRejection).toHaveBeenCalledTimes(routes.length)
-    expect(harness.rendererBoot).not.toHaveBeenCalled()
-    expect(harness.pickDirectory).not.toHaveBeenCalled()
-    expect(harness.validateDirectory).not.toHaveBeenCalled()
   })
 
   it('serves the Windows native picker through a same-origin desktop route', async () => {

@@ -70,6 +70,7 @@ export interface DesktopRecoveryCopy {
   readonly restart: string
   readonly quit: string
   readonly working: string
+  readonly back: string
   readonly cancel: string
   readonly confirmUninstall: string
   readonly confirmUninstallBody: string
@@ -156,6 +157,7 @@ const COPY: Record<DesktopLocale, DesktopRecoveryCopy> = {
     restart: 'Restart DSH Desktop',
     quit: 'Quit',
     working: 'Applying the recovery action…',
+    back: 'Back',
     cancel: 'Cancel',
     confirmUninstall: 'Uninstall this plugin?',
     confirmUninstallBody: 'DSH will remove this dependency from the current Profile and reconcile its plugin layers. This does not depend on which market installed it.',
@@ -244,6 +246,7 @@ const COPY: Record<DesktopLocale, DesktopRecoveryCopy> = {
     restart: '重启 DSH Desktop',
     quit: '退出',
     working: '正在执行恢复操作…',
+    back: '返回',
     cancel: '取消',
     confirmUninstall: '卸载这个插件？',
     confirmUninstallBody: 'DSH 将从当前 Profile 中移除此依赖，并重新整理插件层。无论插件由哪个市场安装，都会使用相同的卸载流程。',

@@ -33,7 +33,7 @@ function installWebClient(
   const webDir = join(home, 'profiles', 'web')
   const template = PROFILE_TEMPLATES.web
   if (template === undefined) throw new Error('test requires the shipped Web template')
-  initProfile(webDir, template.bundles, template.patchReload)
+  initProfile(webDir, template)
   const packageDir = join(webDir, 'node_modules', ...packageName.split('/'))
   mkdirSync(packageDir, { recursive: true })
   writeFileSync(join(packageDir, 'package.json'), JSON.stringify({
@@ -79,20 +79,21 @@ describe('desktop profile composition', {
   it('reads packaged Cordis skills from the physical unpacked preset root', () => {
     const home = temporaryHome()
     const resources = join(home, 'resources')
-    const archivedPresets = join(
+    const archivedDsh = join(
       resources,
       'app.asar',
       'node_modules',
       '@deepseek-ai',
-      'dsh-agent-presets',
+      'dsh',
     )
     const physicalPresetRoot = join(
       resources,
       'app.asar.unpacked',
       'node_modules',
       '@deepseek-ai',
-      'dsh-agent-presets',
-      'presets',
+      'dsh',
+      'config',
+      'agent-presets',
     )
     const skillPath = join(
       physicalPresetRoot,
@@ -102,10 +103,10 @@ describe('desktop profile composition', {
       'SKILL.md',
     )
     mkdirSync(join(resources, 'app.asar', 'lib'), { recursive: true })
-    mkdirSync(archivedPresets, { recursive: true })
+    mkdirSync(archivedDsh, { recursive: true })
     mkdirSync(dirname(skillPath), { recursive: true })
-    writeFileSync(join(archivedPresets, 'package.json'), JSON.stringify({
-      name: '@deepseek-ai/dsh-agent-presets',
+    writeFileSync(join(archivedDsh, 'package.json'), JSON.stringify({
+      name: '@deepseek-ai/dsh',
       exports: { './package.json': './package.json' },
     }) + '\n')
     writeFileSync(skillPath, '# Cordis plugin development\n')
@@ -533,7 +534,7 @@ virtualStoreDirMaxLength: 60
     expect(selected?.packageDir).not.toBe(oldProfileMarketDir)
     expect(JSON.parse(readFileSync(join(selected!.packageDir, 'package.json'), 'utf8'))).toMatchObject({
       name: 'dshmarket',
-      version: '1.17.1',
+      version: '1.38.1',
     })
   })
 
@@ -657,7 +658,7 @@ virtualStoreDirMaxLength: 60
     const webDir = join(home, 'profiles', 'web')
     const template = PROFILE_TEMPLATES.web
     if (template === undefined) throw new Error('test requires the shipped Web template')
-    initProfile(webDir, template.bundles, template.patchReload)
+    initProfile(webDir, template)
     writeFileSync(join(webDir, 'cordis.patch.yml'), [
       '- id: ui-layout',
       "  name: '@deepseek-ai/dsh-client-ui-layout'",
