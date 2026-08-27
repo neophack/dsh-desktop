@@ -1,0 +1,22 @@
+# Loader patch declaring the NewAPI integration plugin.
+# A top-level `id:` row would target an EXISTING bundle entry (override); a new
+# plugin must be inserted, so this layer uses the `insert:` list form. The
+# inserted row's `config:` is the object passed as apply(ctx, config).
+- insert:
+    - id: newapi
+      name: dsh-plugin-newapi
+      config:
+        # Route id used in the LLM provider catalog (chat model selector).
+        route: newapi
+        # Env-style credential reference; the value itself is stored through the
+        # credentials service, never in settings or cordis.yml.
+        apiKeyEnv: NEWAPI_API_KEY
+        # Display name shown next to the route in model pickers.
+        displayName: NewAPI
+        # Fixed NewAPI console origin: pins the server address so the UI never
+        # asks for it; the embedded sign-in opens the provider (Feishu) page
+        # directly against this server.
+        baseUrl: http://172.24.204.251:4000
+        # Username/password form is hidden unless explicitly enabled; the
+        # embedded Feishu sign-in is the default and only path.
+        passwordLogin: false
