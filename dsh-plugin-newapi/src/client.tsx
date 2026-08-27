@@ -726,15 +726,17 @@ function useNewApiSession(
    * Load the snapshot. When the Host served a stale cache (offline server or
    * a background refresh still running), re-poll until the data turns fresh
    * or the retries run out — the extra calls join the Host-side in-flight
-   * refresh, so they cost nothing extra.
+   * refresh, so they cost nothing extra. Spacing backs off exponentially:
+   * after a 429 the Host's cooldown can run to minutes, and a flat 3s poll
+   * would only burn RPC round-trips against a gate that keeps saying no.
    */
   const loadSnapshot = async (): Promise<void> => {
     const result = await call<SnapshotView>('snapshot.get')
     if (!result.ok) return
     applySnapshot(result.value)
     if (result.value.stale !== true) return
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      await new Promise((resolve) => { setTimeout(resolve, 3000) })
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      await new Promise((resolve) => { setTimeout(resolve, Math.min(3000 * 2 ** attempt, 30_000)) })
       const next = await call<SnapshotView>('snapshot.get')
       if (!next.ok) continue
       applySnapshot(next.value)

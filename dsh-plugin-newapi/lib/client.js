@@ -506,9 +506,9 @@ function useNewApiSession(call, t, options = {}) {
     if (!result.ok) return;
     applySnapshot2(result.value);
     if (result.value.stale !== true) return;
-    for (let attempt = 0; attempt < 10; attempt += 1) {
+    for (let attempt = 0; attempt < 6; attempt += 1) {
       await new Promise((resolve) => {
-        setTimeout(resolve, 3e3);
+        setTimeout(resolve, Math.min(3e3 * 2 ** attempt, 3e4));
       });
       const next = await call("snapshot.get");
       if (!next.ok) continue;
