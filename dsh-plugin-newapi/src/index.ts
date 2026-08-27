@@ -427,7 +427,13 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
     const baseUrl = normalizeBaseUrl(baseUrlRaw)
     let info: NewApiServerInfo
     try {
-      info = await new NewApiClient({ baseUrl }).getServerInfo()
+      // Reuse the server.status probe cache instead of a fresh /api/status
+      // call: autoLogin fires this right after the popup's own mount-time
+      // probe already populated it, and opening the login window is about to
+      // add its own burst of requests (the provider redirect, or NewAPI's
+      // login SPA bootstrapping itself) — every request we skip here is
+      // budget saved for that window actually loading instead of 429ing.
+      info = await getServerInfoCached(baseUrl)
     } catch (error) {
       return fail('unreachable', describeError(error))
     }
@@ -754,6 +760,15 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
   /** Short-lived cache for `server.status` probes, keyed by base URL. */
   const serverStatusCache = new Map<string, { info: NewApiServerInfo, at: number }>()
 
+  /** `getServerInfo` behind the shared probe cache — see `startNativeLogin`. */
+  async function getServerInfoCached(baseUrl: string, signal?: AbortSignal): Promise<NewApiServerInfo> {
+    const cached = serverStatusCache.get(baseUrl)
+    if (cached !== undefined && Date.now() - cached.at < 60_000) return cached.info
+    const info = await new NewApiClient({ baseUrl }).getServerInfo(signal)
+    serverStatusCache.set(baseUrl, { info, at: Date.now() })
+    return info
+  }
+
   const endpoints: Record<string, Handler> = {
     /** Stored config + credential status; never the secret value. */
     'config.get': async () => {
@@ -825,13 +840,8 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
       if (baseUrl === '') return fail('invalid-argument', 'baseUrl is required')
       // Probes fire on every settings-page mount; serve a short cache instead
       // of re-hitting /api/status each time.
-      const cached = serverStatusCache.get(baseUrl)
-      if (cached !== undefined && Date.now() - cached.at < 60_000) {
-        return ok({ baseUrl, info: cached.info })
-      }
       try {
-        const info = await new NewApiClient({ baseUrl }).getServerInfo(signal)
-        serverStatusCache.set(baseUrl, { info, at: Date.now() })
+        const info = await getServerInfoCached(baseUrl, signal)
         return ok({ baseUrl, info })
       } catch (error) {
         return fail('unreachable', describeError(error))
