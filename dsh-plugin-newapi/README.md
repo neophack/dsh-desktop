@@ -11,7 +11,7 @@ A [DSH](https://github.com/deepseek-ai/deepseek-harness) / DSH Desktop plugin th
 
 ## Signing in
 
-NewAPI v1.0.0-rc.x authenticates with a `session` cookie plus a short-lived Bearer minted by `POST /api/user/auth/refresh`. The plugin supports two paths:
+Sign-in itself runs through NewAPI's browser flow (`session` cookie + short-lived Bearer), but the durable credential the plugin keeps is the **long-lived system access token** ("访问令牌"): right after a successful login the Host reuses the locally cached token when it still authenticates the same account, or mints one via `GET /api/user/token` (the value is shown exactly once, and regenerating invalidates older tokens — which is why it is minted once and cached). All later reads (usage, keys, models, pricing) then send `Authorization: Bearer <access token>` directly — no cookies are constructed and the rate-limited `POST /api/user/auth/refresh` exchange is never touched again, which keeps the server from answering 429. Existing installs that still hold a cookie credential are migrated automatically at startup. If the token is later replaced server-side (another device signs in, or it is regenerated on the web console), the plugin does NOT fight for it: the next read signs the plugin out — the chat API key is independent and keeps working — and an explicit sign-in fetches the fresh token. Automatic re-mints from several logged-in clients would rotate the single token endlessly and 429 the server. The login handshake supports two paths:
 
 1. **Dedicated sign-in window (the default and only entry, zero copy-paste)** — clicking *Sign in with Feishu* first mints the OAuth state server-side, then opens the **Feishu authorize page** in its own top-level login window (the redirect_uri points back at the server itself, so the exchange always succeeds — no admin configuration at all). After the QR authorization the session cookie lands in DSH Desktop's Electron default session via a top-level redirect — cross-site iframe XHR Set-Cookies are dropped by the browser's SameSite rules, which is why the window is top-level — where the Host picks it up, verifies it, and persists it; plan/usage data is fetched automatically and an **API key is ensured** (created when the account has none, first one used otherwise) into the chat credential ref. Closing the window early surfaces an immediate "sign-in did not complete" and can be retried at any time. Desktop-app only; a plain `dsh` CLI Host reports the capability as unavailable.
 2. **Password sign-in** (when the server enables it): enter username/password; the plugin performs login → refresh → persists the session, then auto-renews it.
@@ -26,6 +26,8 @@ The plugin is composed of two halves, exactly like official DSH plugins:
 - **Browser half** (`lib/client.js`) — a `settings.section` slot contribution (the "NewAPI" page in Settings) built on the shared UI primitives.
 
 Model sync deliberately does **not** register a parallel LLM adapter. It writes a provider profile into the shipped `@deepseek-ai/dsh-llm-pi-ai` settings namespace (`providers.<route>`), which is the official way to add an OpenAI-compatible gateway route. The chat model selector, catalog joins, and retry policies all keep working unchanged. The token is referenced by env name, not copied.
+
+**Models without a usable API key never show in the selector.** The selector's menu is driven entirely by the `llm-pi-ai` catalog, so the plugin hooks the chat key's credential commits (`credentials/reference-updated` — the very event the selector's catalog refreshes on): when the key is missing the whole route leaves the catalog immediately (its profile is stashed in the `newapi` namespace, keeping the synced models and limits), and when the key returns the profile is restored verbatim, no network needed. `models.sync` also refuses to run without a key (`not-configured`), so no code path can ever write a key-less route. A provider you deleted yourself stays deleted: the stash is only ever written by the plugin's own hide.
 
 Quota values are converted with the server-reported `quota_per_unit` from `/api/status` (default 500,000, i.e. $1 = 500,000 units); USD amounts also show a local-currency reference using `usd_exchange_rate`.
 
@@ -65,10 +67,11 @@ Then open **Settings → NewAPI** (or the sidebar login button). With `baseUrl` 
 
 ## Security notes
 
-- The credential (access token or session value) lives only in the local credentials store (`$DSH_HOME/.credentials.yaml`, 0600) under the `NEWAPI_API_KEY` reference.
+- The credential (the cached system access token, or a session value on pre-token servers) lives only in the local credentials store (`$DSH_HOME/.credentials.yaml`, 0600); the console credential under the `NEWAPI_SESSION` reference, the chat API key under `NEWAPI_API_KEY`.
 - Key material is never sent to the renderer; the token list is masked to the last 4 characters.
 - The `/newapi` RPC channel is loopback-authority only, same as the built-in settings surface.
-- Sessions renewed mid-flight are persisted back by the Host automatically.
+- The system access token is minted at most once per login (regeneration invalidates older tokens), reused from the local cache while it still authenticates the same account, and replaced only when it stops working.
+- Sessions renewed mid-flight are persisted back by the Host automatically (fallback cookie flow only).
 - The embedded sign-in's cookie capture runs only while you explicitly keep the sign-in page open, reads exactly one cookie (`session`) for the configured server origin, and stores it after verifying it against the server; the watch stops as soon as the attempt settles. It relies on the DSH Desktop Electron session and disables itself in ordinary CLI Hosts.
 
 ## Develop

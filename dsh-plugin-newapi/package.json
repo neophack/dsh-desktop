@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-newapi",
-  "version": "0.8.0",
+  "version": "0.8.4",
   "description": "NewAPI gateway integration for DSH: embedded zero-paste SSO login, manage API keys, browse supported models and quota usage, and sync models into the LLM provider catalog for chat",
   "license": "MIT",
   "type": "module",
@@ -61,7 +61,7 @@
   ],
   "scripts": {
     "build": "node build.mjs",
-    "test": "node test/smoke.mjs && node test/client-shape.mjs && node test/login-flow.mjs && node test/snapshot-cache.mjs",
+    "test": "node test/smoke.mjs && node test/client-shape.mjs && node test/login-flow.mjs && node test/route-heal.mjs && node test/route-visibility.mjs && node test/snapshot-cache.mjs",
     "prepublishOnly": "node build.mjs"
   },
   "keywords": [

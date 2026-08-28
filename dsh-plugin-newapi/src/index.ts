@@ -3,9 +3,11 @@
  *
  * Responsibilities:
  * 1. Own a settings namespace (`newapi`) holding the console base URL and the
- *    resolved auth kind. Secrets never live here — the credential (personal
- *    access token or session-cookie value) is stored through the credentials
- *    service under a ref named by config (`apiKeyEnv`, default NEWAPI_API_KEY).
+ *    resolved auth kind. Secrets never live here — the durable console
+ *    credential is the long-lived system access token ("访问令牌") minted at
+ *    login and cached through the credentials service (ref `NEWAPI_SESSION`),
+ *    while the chat API key sits under the ref named by config (`apiKeyEnv`,
+ *    default NEWAPI_API_KEY).
  * 2. Expose a loopback-fenced Connection RPC channel `/newapi` for the bundled
  *    settings page: server capability probing, password login, SSO bridging
  *    (open the console login page; the user pastes back an access token or
@@ -96,6 +98,13 @@ const Config = z.object({
    * per-model limit; 0 disables the default. Users can change and save it.
    */
   defaultContextWindow: z.number().default(DEFAULT_CONTEXT_WINDOW),
+  /**
+   * JSON string: the llm-pi-ai route profile stashed when the chat API key
+   * went missing and the route was hidden from the selector (schemastery has
+   * no object schema, hence the string). Restored verbatim once the key is
+   * back, so a key round-trip costs no network.
+   */
+  stashedRoute: z.string().default(''),
 })
 
 export const name = 'dsh-plugin-newapi'
@@ -107,10 +116,21 @@ function ok<T>(value: T): RpcResult<T> {
   return { ok: true, value }
 }
 
+/**
+ * RPC error codes the renderer's connection layer can decode. It validates
+ * the response envelope against a closed discriminated union of codes; any
+ * plugin-specific code (e.g. 'rate-limited') makes the WHOLE response fail
+ * parsing and the UI shows a raw ZodError dump ("操作失败: invalid_union …")
+ * instead of the message. Map to the two generic codes; the original code
+ * rides along inside `details` for diagnostics.
+ */
+const RPC_WIRE_CODES = new Set(['bad-request', 'cancelled', 'internal'])
+
 function fail(code: string, message: string): RpcResult<never> {
+  const wireCode = code === 'invalid-argument' ? 'bad-request' : RPC_WIRE_CODES.has(code) ? code : 'internal'
   // `details` is required by the client connection's response-envelope schema;
   // omitting it makes every failed RPC throw a ZodError in the renderer.
-  return { ok: false, error: { code, message, details: {} } }
+  return { ok: false, error: { code: wireCode, message, details: { code } } }
 }
 
 interface StoredConfig {
@@ -120,9 +140,20 @@ interface StoredConfig {
   /** JSON string: Record<modelId, { contextWindow?: number, maxTokens?: number }>. */
   modelLimits?: string
   defaultContextWindow?: number
+  /** JSON string: the llm-pi-ai route profile hidden while the chat key is missing. */
+  stashedRoute?: string
 }
 
-type ModelLimits = Record<string, { contextWindow?: number, maxTokens?: number }>
+type ModelLimits = Record<string, { contextWindow?: number, maxTokens?: number, image?: boolean }>
+
+/**
+ * Request modalities declared for one model. The gateway's catalog cannot
+ * describe modalities, so image input is ON by default and a stored
+ * `image: false` is the explicit opt-out.
+ */
+function modelInputFor(limits: ModelLimits, id: string): string[] {
+  return limits[id]?.image === false ? ['text'] : ['text', 'image']
+}
 
 /** Parse the stored per-model limits JSON; corrupt values collapse to empty. */
 function readModelLimits(raw: string | undefined): ModelLimits {
@@ -133,15 +164,28 @@ function readModelLimits(raw: string | undefined): ModelLimits {
     const limits: ModelLimits = {}
     for (const [id, entry] of Object.entries(parsed as Record<string, unknown>)) {
       if (typeof entry !== 'object' || entry === null) continue
-      const { contextWindow, maxTokens } = entry as { contextWindow?: unknown, maxTokens?: unknown }
-      const clean: { contextWindow?: number, maxTokens?: number } = {}
+      const { contextWindow, maxTokens, image } = entry as { contextWindow?: unknown, maxTokens?: unknown, image?: unknown }
+      const clean: { contextWindow?: number, maxTokens?: number, image?: boolean } = {}
       if (typeof contextWindow === 'number' && contextWindow > 0) clean.contextWindow = Math.floor(contextWindow)
       if (typeof maxTokens === 'number' && maxTokens > 0) clean.maxTokens = Math.floor(maxTokens)
+      if (image === false) clean.image = false
       if (Object.keys(clean).length > 0) limits[id] = clean
     }
     return limits
   } catch {
     return {}
+  }
+}
+
+/** Parse the stashed llm-pi-ai route profile; anything corrupt means "none". */
+function readStashedRoute(raw: string | undefined): Record<string, unknown> | undefined {
+  if (typeof raw !== 'string' || raw === '') return undefined
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined
+    return parsed as Record<string, unknown>
+  } catch {
+    return undefined
   }
 }
 
@@ -181,9 +225,14 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
   const currentCredential = async (): Promise<{ kind: 'token' | 'session' | 'refresh', value: string } | undefined> => {
     const hit = await ctx.credentials.resolve(sessionRef)
     if (typeof hit?.value !== 'string' || hit.value.length === 0) return undefined
-    // Stored kind: legacy one-api servers used a `session` cookie; new-api
-    // rc.2x+ uses the rotating `new_api_refresh` cookie. Default to refresh.
-    return { kind: stored().authKind === 'session' ? 'session' : 'refresh', value: hit.value }
+    const kind = stored().authKind
+    // Stored kind: 'token' is a long-lived system access token (访问令牌, sent
+    // as Bearer, no cookie needed); 'session' is a legacy one-api session
+    // cookie; anything else defaults to new-api rc.2x+'s rotating
+    // `new_api_refresh` cookie.
+    if (kind === 'token') return { kind: 'token', value: hit.value }
+    if (kind === 'session') return { kind: 'session', value: hit.value }
+    return { kind: 'refresh', value: hit.value }
   }
 
   const describeError = (error: unknown): string => {
@@ -198,6 +247,12 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
       baseUrl: currentBaseUrl(),
       auth: undefined,
       onSessionRotated: (value) => {
+        // Only a cookie-kind credential rotates. After the access-token
+        // migration a straggler cookie client can still observe a Set-Cookie
+        // rotation in flight; persisting it would overwrite the stored access
+        // token with a cookie while authKind stays 'token' — a broken state.
+        const kind = stored().authKind
+        if (kind === 'token' || kind === '') return
         void ctx.credentials.set(sessionRef, value).catch((error: unknown) => {
           logger.warn(`newapi: persisting rotated session failed: ${describeError(error)}`)
         })
@@ -311,13 +366,51 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
   }, 'newapi: embedded login cleanup')
 
   /**
-   * Persist a verified login: the auth cookie (rotating `new_api_refresh`,
-   * or `session` on legacy servers) plus the chat API key — the first
-   * existing token, or a freshly created one when the account has none
-   * (`ensureApiKey`).
+   * Resolve the long-lived system access token ("访问令牌") for the account
+   * that just signed in, so every later read (usage, tokens, models, pricing)
+   * authenticates with `Authorization: Bearer` and never touches the
+   * rate-limited `/api/user/auth/refresh` exchange again.
+   *
+   * Reuse-first: new-api shows an access token exactly once at generation and
+   * never reveals it again, so the locally cached credential is the only
+   * "already have one" oracle. A cached token that still authenticates the
+   * SAME account on the SAME server is reused as-is; only a cold or dead
+   * cache mints a fresh token (`GET /api/user/token`), which instantly
+   * invalidates every older access token of that account.
+   * @returns the persisted auth kind ('token', or the cookie fallback).
    */
-  async function persistLogin(client: NewApiClient, baseUrl: string, user: NewApiUser, kind: 'session' | 'refresh'): Promise<void> {
-    await ctx.credentials.set(sessionRef, client.authCookieValue() ?? '')
+  async function ensureAccessToken(client: NewApiClient, baseUrl: string, user: NewApiUser): Promise<'token' | 'session' | 'refresh'> {
+    const cached = await currentCredential()
+    if (cached?.kind === 'token' && baseUrl === currentBaseUrl()) {
+      const probe = new NewApiClient({ baseUrl, auth: { kind: 'token', value: cached.value } })
+      const probed = await probe.getUser().catch(() => undefined)
+      if (probed !== undefined && probed.id === user.id) return 'token'
+    }
+    const token = await client.getAccessToken()
+    await ctx.credentials.set(sessionRef, token)
+    logger.info('newapi: generated and cached a fresh system access token')
+    return 'token'
+  }
+
+  /**
+   * Persist a verified login: the system access token ("访问令牌", preferred —
+   * see `ensureAccessToken`; the freshly captured auth cookie is the
+   * fallback when the server refuses the token flow) plus the chat API key —
+   * the first existing token, or a freshly created one when the account has
+   * none (`ensureApiKey`).
+   */
+  async function persistLogin(client: NewApiClient, baseUrl: string, user: NewApiUser, cookieKind: 'session' | 'refresh'): Promise<'token' | 'session' | 'refresh'> {
+    let kind: 'token' | 'session' | 'refresh' = cookieKind
+    try {
+      kind = await ensureAccessToken(client, baseUrl, user)
+    } catch (error) {
+      // Older one-api-style servers expose no /api/user/token; the captured
+      // cookie keeps everything working there (refresh-exchange flow).
+      logger.warn(`newapi: securing the access token failed, storing the ${cookieKind} cookie instead: ${describeError(error)}`)
+    }
+    if (kind !== 'token') {
+      await ctx.credentials.set(sessionRef, client.authCookieValue() ?? '')
+    }
     await scope.update({ baseUrl, authKind: kind } satisfies { baseUrl: string, authKind: string })
     // A new credential invalidates any cached snapshot and its client.
     snapshotClient = undefined
@@ -401,6 +494,29 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
     } finally {
       attempt.busy = false
     }
+  }
+
+  /**
+   * Drop a dead credential and sign the plugin out. The account's only
+   * access token was replaced server-side (another device's sign-in or a web
+   * regeneration), so this credential can never work again.
+   *
+   * Deliberately NO automatic re-mint: on a rotate-on-read server two
+   * self-healing clients fight over the single token (each re-mint
+   * invalidating the other) and hammer the CriticalRateLimit paths into
+   * 429 storms. Signing out parks this client until the user explicitly
+   * signs in again — rotations then happen at human pace only.
+   *
+   * The chat API key (sk-…) is independent of the access token and stays
+   * valid, so it (and the catalog route) are kept and chat keeps working.
+   */
+  async function signOutDeadCredential(): Promise<void> {
+    await ctx.credentials.unset(sessionRef)
+    await scope.update({ authKind: '' } as { baseUrl?: string, authKind?: string, passwordLogin?: string })
+    snapshotClient = undefined
+    snapshotClientKey = ''
+    invalidateSnapshot()
+    logger.warn('newapi: stored credential rejected (401; token replaced server-side); signed out — sign in again to fetch a fresh token')
   }
 
   /**
@@ -628,6 +744,9 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
   /**
    * Perform one full network fetch; shared by the direct path (no cache yet /
    * manual refresh) and the background refresh behind a stale cache.
+   * A 401 means the stored credential was replaced server-side (another
+   * sign-in or a web regeneration): sign out and ask for an explicit
+   * re-login — never re-mint automatically (see signOutDeadCredential).
    */
   function refreshSnapshot(signal: AbortSignal | undefined): Promise<RpcResult<SnapshotPayload>> {
     const flight = (async (): Promise<RpcResult<SnapshotPayload>> => {
@@ -666,6 +785,16 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
           // there) so the host gate and the transport back off in lockstep.
           rateLimitedUntil = Date.now() + Math.max(RATE_LIMIT_COOLDOWN_MS, sharedCooldownRemaining())
           return fail('rate-limited', 'newapi: server rate limit (429) hit; wait a moment before retrying')
+        }
+        // A rejected credential means it was replaced server-side (another
+        // device signed in, or the token was regenerated on the web console
+        // — the account's only token changes). Sign out instead of fighting
+        // for the token: automatic re-mints from several logged-in clients
+        // rotate it endlessly and 429 the server. The user signs in again
+        // (one deliberate rotation) when they want usage data back.
+        if (error instanceof NewApiError && error.status === 401) {
+          await signOutDeadCredential()
+          return fail('token-expired', 'the access token was replaced on the server (another sign-in or a web regeneration); signed out — please sign in again')
         }
         return fail('fetch-failed', describeError(error))
       }
@@ -756,6 +885,16 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
     return clone
   }
 
+  /**
+   * Display form of a secret for the settings page: the first and last few
+   * characters stay readable so the user can tell WHICH credential is
+   * stored; the middle is masked. Never returns the full value.
+   */
+  function maskSecret(value: string): string {
+    if (value.length <= 8) return '****'
+    return `${value.slice(0, 4)}****${value.slice(-4)}`
+  }
+
   /** Never ship full key material to the renderer; keep only a masked tail. */
   function redactTokens(tokens: NewApiToken[]): NewApiToken[] {
     return tokens.map((token) => ({
@@ -807,6 +946,8 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
         modelLimits: readModelLimits(storedConfig.modelLimits),
         defaultContextWindow: currentDefaultContextWindow(),
         authKind: storedConfig.authKind ?? '',
+        /** Masked head+tail of the cached system access token; only with token auth. */
+        accessTokenMasked: credential?.kind === 'token' ? maskSecret(credential.value) : undefined,
         tokenConfigured: sessionConfigured && credential !== undefined,
         apiKeyConfigured,
         route,
@@ -904,9 +1045,9 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
       try {
         const user = await client.loginWithPassword(username, password, signal)
         // The login response seeds whichever auth cookie this server uses.
-        const kind: 'session' | 'refresh' = client.sessionValue() !== undefined ? 'session' : 'refresh'
+        const cookieKind: 'session' | 'refresh' = client.sessionValue() !== undefined ? 'session' : 'refresh'
         if (client.authCookieValue() === undefined) return fail('login-failed', 'server did not establish a session')
-        await persistLogin(client, normalized, user, kind)
+        const kind = await persistLogin(client, normalized, user, cookieKind)
         return ok({ authKind: kind, user: redactUser(user) })
       } catch (error) {
         return fail('login-failed', describeError(error))
@@ -917,9 +1058,10 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
     'config.clear': async () => {
       await ctx.credentials.unset(ref)
       await ctx.credentials.unset(sessionRef)
-      await scope.update({ authKind: '' } as { baseUrl?: string, authKind?: string, passwordLogin?: string })
+      await scope.update({ authKind: '', stashedRoute: '' } as { baseUrl?: string, authKind?: string, passwordLogin?: string, stashedRoute?: string })
       // Credentials are gone: drop the chat route too so the selector stops
       // offering key-less models (models.sync re-adds it after the next login).
+      // Signing out is deliberate removal, so the stash goes with it.
       await removeRouteFromCatalog('signed out')
       snapshotClient = undefined
       snapshotClientKey = ''
@@ -991,11 +1133,29 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
      * `providers.<route>` so the shipped pi-ai adapter registers the chat
      * route. The token is *referenced* (apiKeyEnv), never copied. Stored
      * per-model limits (contextWindow / maxTokens) ride along on each entry
-     * so DSH sizes requests to the real model capability.
+     * so DSH sizes requests to the real model capability, and every entry
+     * declares its input modalities explicitly — image input ON by default,
+     * opt out per model via `models.setLimit` — so `read_image` works without
+     * waiting for a catalog that can never describe gateway-served models.
      */
     'models.sync': async (payload, signal) => {
       if (ctx.settings.get(LLM_PI_AI_NS) === undefined) {
         return fail('adapter-missing', 'the llm-pi-ai settings namespace is not registered; install or enable @deepseek-ai/dsh-llm-pi-ai in this profile')
+      }
+      // Never write a key-less route: every model on it would show in the chat
+      // selector and fail its first request with MISSING_CREDENTIAL. Hiding
+      // here (which also stashes any existing route) keeps the selector clean
+      // even when a caller syncs without checking first (persistLogin's
+      // auto-sync after a failed key ensure).
+      let keyConfigured = false
+      try {
+        keyConfigured = (await ctx.credentials.describe(ref)).configured
+      } catch {
+        keyConfigured = false
+      }
+      if (!keyConfigured) {
+        await reconcileCatalogVisibility('api key missing at sync')
+        return fail('not-configured', 'no NewAPI chat API key stored; sign in first — the chat model selector never offers key-less models')
       }
       const limit = readSyncLimit(payload)
       const result = await fetchSnapshot(signal)
@@ -1004,13 +1164,21 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
       if (snapshot.models.length === 0) return fail('no-models', 'newapi returned no visible models')
       const limits = readModelLimits(stored().modelLimits)
       const defaultContextWindow = currentDefaultContextWindow()
-      const models = (limit === undefined ? snapshot.models : snapshot.models.slice(0, limit)).map((model) => ({
-        id: model.id,
-        // Explicit per-model limits win; otherwise the default context window
-        // (128k out of the box) sizes requests for models the gateway can't
-        // describe. 0 disables the default.
-        ...(limits[model.id] ?? (defaultContextWindow > 0 ? { contextWindow: defaultContextWindow } : {})),
-      }))
+      const models = (limit === undefined ? snapshot.models : snapshot.models.slice(0, limit)).map((model) => {
+        // `image` is plugin-side state, not an llm-pi-ai model field; it rides
+        // the entry below as the explicit `input` modality list instead.
+        const { image: _image, ...storedLimits } = limits[model.id] ?? {}
+        return {
+          id: model.id,
+          // Explicit per-model limits win; otherwise the default context window
+          // (128k out of the box) sizes requests for models the gateway can't
+          // describe. 0 disables the default.
+          ...(Object.keys(storedLimits).length > 0
+            ? storedLimits
+            : defaultContextWindow > 0 ? { contextWindow: defaultContextWindow } : {}),
+          input: modelInputFor(limits, model.id),
+        }
+      })
       // The OpenAI-compatible endpoint is the console origin plus /v1; string
       // concatenation preserves any base path a subpath deployment carries.
       const baseURL = `${currentBaseUrl().replace(/\/+$/, '')}/v1`
@@ -1022,16 +1190,22 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
         models,
       }
       await ctx.settings.update(LLM_PI_AI_NS, { providers: { [route]: profile } })
+      // A live route supersedes any stash from an earlier key-less spell.
+      if (stored().stashedRoute !== '') {
+        await scope.update({ stashedRoute: '' } satisfies { stashedRoute: string })
+      }
       return ok({ route, count: models.length, baseURL })
     },
 
     /**
      * Set (or clear, with non-positive/absent values) one model's capability
      * limits, persist them in the newapi settings namespace, and re-sync the
-     * llm-pi-ai profile so the limits take effect immediately.
+     * llm-pi-ai profile so the limits take effect immediately. An explicit
+     * `image` boolean toggles the image-input declaration the next sync
+     * writes; absent leaves the stored flag alone (default ON).
      */
     'models.setLimit': async (payload) => {
-      const input = (payload ?? {}) as { id?: unknown, contextWindow?: unknown, maxTokens?: unknown }
+      const input = (payload ?? {}) as { id?: unknown, contextWindow?: unknown, maxTokens?: unknown, image?: unknown }
       if (typeof input.id !== 'string' || input.id === '') {
         return fail('invalid-argument', 'id is required')
       }
@@ -1043,11 +1217,13 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
       const contextWindow = readLimit(input.contextWindow)
       const maxTokens = readLimit(input.maxTokens)
       const limits: ModelLimits = readModelLimits(stored().modelLimits)
-      const entry: { contextWindow?: number, maxTokens?: number } = { ...limits[input.id] }
+      const entry: { contextWindow?: number, maxTokens?: number, image?: boolean } = { ...limits[input.id] }
       if (contextWindow !== undefined) entry.contextWindow = contextWindow
       else delete entry.contextWindow
       if (maxTokens !== undefined) entry.maxTokens = maxTokens
       else delete entry.maxTokens
+      if (input.image === false) entry.image = false
+      else if (input.image === true) delete entry.image
       if (Object.keys(entry).length === 0) delete limits[input.id]
       else limits[input.id] = entry
       await scope.update({ modelLimits: JSON.stringify(limits) } as { baseUrl?: string, authKind?: string, passwordLogin?: string, currency?: string, modelLimits?: string })
@@ -1097,6 +1273,100 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
     }
   }
 
+  // One reconcile at a time: the startup sequence and a credential event can
+  // race (ensureApiKeyStored's set() fires the event mid-sequence), and two
+  // concurrent restores would write the same profile twice.
+  let reconcileInFlight: Promise<void> | undefined
+
+  /**
+   * Keep the chat model selector honest about the chat API key. The selector's
+   * menu is driven by the llm-pi-ai settings document — the client refreshes
+   * its catalog on every `credentials/reference-updated` and settings change —
+   * so that document is the only filter lever. When the key is missing the
+   * route is removed from it (after stashing the profile), so the menu stops
+   * offering models that would fail every request with MISSING_CREDENTIAL;
+   * when the key returns the stashed profile is restored verbatim, no network
+   * needed. Only this hide path ever writes the stash, so a route the user
+   * deleted themselves is never resurrected.
+   */
+  function reconcileCatalogVisibility(reason: string): Promise<void> {
+    if (reconcileInFlight !== undefined) return reconcileInFlight
+    const flight = (async (): Promise<void> => {
+      try {
+        let keyConfigured = false
+        try {
+          keyConfigured = (await ctx.credentials.describe(ref)).configured
+        } catch {
+          keyConfigured = false
+        }
+        const section = ctx.settings.get(LLM_PI_AI_NS) as { providers?: Record<string, unknown> } | undefined
+        const hasRoute = section?.providers !== undefined && route in section.providers
+        if (!keyConfigured) {
+          if (!hasRoute) return
+          const stashed = section?.providers?.[route]
+          await scope.update({
+            stashedRoute: typeof stashed === 'object' && stashed !== null ? JSON.stringify(stashed) : '',
+          } satisfies { stashedRoute: string })
+          await removeRouteFromCatalog(reason)
+          return
+        }
+        if (hasRoute) return
+        const stash = readStashedRoute(stored().stashedRoute)
+        if (stash === undefined) return
+        await ctx.settings.update(LLM_PI_AI_NS, {
+          providers: { [route]: stash },
+        } as Parameters<typeof ctx.settings.update>[1])
+        await scope.update({ stashedRoute: '' } satisfies { stashedRoute: string })
+        logger.info(`newapi: restored the chat route "${route}" from the stash (${reason})`)
+      } catch (error) {
+        logger.warn(`newapi: reconciling the chat route visibility failed: ${describeError(error)}`)
+      }
+    })()
+    reconcileInFlight = flight
+    void flight.finally(() => { reconcileInFlight = undefined })
+    return flight
+  }
+
+  // The live filter hook: the chat key's credential commits (set/unset from
+  // this plugin, the Models page, or another window) drive the route's
+  // visibility in real time. The selector's catalog refreshes on this very
+  // event, so the menu follows immediately. The ref match tolerates either
+  // CredentialRef shape (a branded string or an object carrying `name`).
+  ctx.on('credentials/reference-updated', (changed) => {
+    if (changed !== ref && String(changed) !== apiKeyEnv) return
+    void reconcileCatalogVisibility('api key credential changed')
+  })
+
+  /**
+   * Startup migration to access-token auth: installs that signed in before
+   * this flow existed hold a cookie credential, and every data fetch then
+   * goes through the `POST /api/user/auth/refresh` exchange — a
+   * CriticalRateLimit path and the dominant source of plugin-only 429s. One
+   * refresh + one `GET /api/user/token` here replaces all future exchanges.
+   * Non-fatal: any failure (offline server, pre-token one-api deployment)
+   * keeps the still-working cookie credential and retries on the next start.
+   */
+  async function ensureAccessTokenStored(): Promise<void> {
+    try {
+      const baseUrl = currentBaseUrl()
+      if (baseUrl === '') return
+      const credential = await currentCredential()
+      if (credential === undefined || credential.kind === 'token') return
+      const client = snapshotClientFor(baseUrl, credential)
+      const user = await client.getUser()
+      const token = await client.getAccessToken()
+      await ctx.credentials.set(sessionRef, token)
+      await scope.update({ authKind: 'token' } as { baseUrl?: string, authKind?: string, passwordLogin?: string })
+      // The snapshot client still holds the cookie credential; drop it so the
+      // next fetch re-seeds from the stored access token.
+      snapshotClient = undefined
+      snapshotClientKey = ''
+      logger.info(`newapi: migrated the stored ${credential.kind} cookie to a system access token`)
+    } catch (error) {
+      logger.warn(`newapi: access-token migration deferred (keeping the cookie credential): ${describeError(error)}`)
+    }
+  }
+
   /**
    * Self-heal a lost chat API key: the credential store can lose NEWAPI_API_KEY
    * (e.g. an unclean shutdown across app instances) while the session cookie
@@ -1121,23 +1391,63 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
   }
 
   /**
-   * Startup catalog guard: after the key self-heal had its chance, hide the
-   * route again when the chat API key is still missing, so the model selector
-   * never offers models that would fail with MISSING_CREDENTIAL.
+   * Startup heal for the stored chat route. `models.sync` bakes each model's
+   * context window and input modalities into the llm-pi-ai profile at SYNC
+   * time, so a route last synced before those existed keeps serving models
+   * with no limit at all — llm-pi-ai then assumes its 256k fallback and
+   * auto-compaction fires far above the ~130k band where gateway-served
+   * models start emitting corrupted tool calls, the runaway unknown-tool
+   * loops the default exists to prevent — and with no `input` declaration,
+   * which defaults llm-pi-ai to text-only and hides `read_image`. Stamping
+   * the effective values onto stored models that carry neither closes both
+   * gaps for existing installs without any network traffic. Explicit values
+   * always win: a per-model limit from `models.setLimit` takes precedence,
+   * an entry already declaring its own contextWindow or input stays
+   * untouched, and `defaultContextWindow: 0` disables the context heal
+   * exactly as it disables the sync-time default (the input stamp is
+   * deterministic plugin state, not a guess, so it heals regardless).
    */
-  async function hideRouteWhenKeyMissing(): Promise<void> {
+  async function healStoredRouteLimits(): Promise<void> {
     try {
-      const described = await ctx.credentials.describe(ref)
-      if (described.configured) return
-      await removeRouteFromCatalog('api key missing at startup')
+      const defaultContextWindow = currentDefaultContextWindow()
+      const section = ctx.settings.get(LLM_PI_AI_NS) as
+        | { providers?: Record<string, { models?: unknown }> }
+        | undefined
+      const routeProfile = section?.providers?.[route]
+      if (routeProfile === undefined || !Array.isArray(routeProfile.models) || routeProfile.models.length === 0) return
+      const limits = readModelLimits(stored().modelLimits)
+      const healed = routeProfile.models.map((model: unknown) => {
+        if (typeof model !== 'object' || model === null) return model
+        const entry = model as { id?: unknown, contextWindow?: unknown, input?: unknown }
+        if (typeof entry.id !== 'string') return model
+        let next: { id?: unknown, contextWindow?: unknown, input?: unknown } = entry
+        if (defaultContextWindow > 0 && typeof entry.contextWindow !== 'number') {
+          next = { ...next, contextWindow: limits[entry.id]?.contextWindow ?? defaultContextWindow }
+        }
+        if (!Array.isArray(entry.input)) {
+          next = { ...next, input: modelInputFor(limits, entry.id) }
+        }
+        return next === entry ? model : next
+      })
+      if (healed.every((model: unknown, index: number) => model === routeProfile.models?.[index])) return
+      await ctx.settings.update(LLM_PI_AI_NS, {
+        providers: { [route]: { ...routeProfile, models: healed } },
+      } as Parameters<typeof ctx.settings.update>[1])
+      logger.info('newapi: stamped missing context windows / input modalities onto stored models')
     } catch (error) {
-      logger.warn(`newapi: startup catalog guard failed: ${describeError(error)}`)
+      logger.warn(`newapi: healing stored model limits failed: ${describeError(error)}`)
     }
   }
 
   void (async () => {
+    // Token migration first: it converts cookie installs before anything else
+    // can spend a refresh exchange on them. The key self-heal can itself fire
+    // the credential event, so the reconcile below may share its in-flight
+    // run instead of repeating it.
+    await ensureAccessTokenStored()
     await ensureApiKeyStored()
-    await hideRouteWhenKeyMissing()
+    await reconcileCatalogVisibility('api key missing at startup')
+    await healStoredRouteLimits()
   })()
 
   logger.info(`newapi: ready (route=${route}, apiKeyEnv=${apiKeyEnv})`)

@@ -6,11 +6,13 @@
  *
  * - Management endpoints live under `<base>/api`; responses use the
  *   `{success, message, data}` envelope.
- * - Auth model (rc.25): a `session` cookie (set by password login or the
- *   in-browser SSO callback) plus a short-lived JWT obtained from
- *   `POST /api/user/auth/refresh`, sent as `Authorization: Bearer`.
- *   Long-lived personal access tokens ("访问令牌", shown once on the personal
- *   settings page) are also accepted as Bearer.
+ * - Auth model (rc.25): long-lived personal access tokens ("访问令牌", shown
+ *   once on the personal settings page) are accepted as `Authorization:
+ *   Bearer` and are the preferred credential — they skip the session/refresh
+ *   dance entirely. Fallback for the login handshake only: a `session` cookie
+ *   (set by password login or the in-browser SSO callback) plus a short-lived
+ *   JWT obtained from `POST /api/user/auth/refresh` (a CriticalRateLimit
+ *   path, so it is exchanged once per login and never for routine reads).
  * - OAuth SSO (e.g. Feishu as a custom_oauth_provider) always redirects back
  *   to the NewAPI server itself, so a non-browser client cannot complete it;
  *   the plugin opens the console login page and asks the user to bridge a
@@ -423,6 +425,21 @@ export class NewApiClient {
       sharedTransport.bearerExpiresAt = this.bearerExpiresAt
     }
     this.learnUser(data.user)
+  }
+
+  /**
+   * Generate a fresh long-lived system access token ("访问令牌") via
+   * `GET /api/user/token`. The server returns the raw value exactly once —
+   * here — and regenerating instantly invalidates every previous access
+   * token, so the caller must persist the returned value before relying on
+   * it. Requires an authenticated client (session cookie or bearer).
+   */
+  async getAccessToken(signal?: AbortSignal): Promise<string> {
+    await this.ensureFreshBearer(signal)
+    const data = await this.get<unknown>('/api/user/token', signal)
+    const value = typeof data === 'string' ? data.trim() : ''
+    if (value === '') throw new NewApiError('newapi: server returned an empty access token')
+    return value
   }
 
   private ensureFreshBearer(signal?: AbortSignal): Promise<void> {
