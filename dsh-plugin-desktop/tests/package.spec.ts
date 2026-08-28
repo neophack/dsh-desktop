@@ -348,10 +348,12 @@ describe('published package surface', () => {
           '',
         ].join('\n'))
 
+        // The fake powershell is a freshly created executable; on-access AV
+        // scanning of new binaries can delay its first run well past 30s.
         const stdout = execFileSync(electronPath, [main], {
           encoding: 'utf8',
           env: environment,
-          timeout: 30_000,
+          timeout: 120_000,
           windowsHide: true,
         })
         expect(stdout).toContain('OPEN_OK')
@@ -360,7 +362,7 @@ describe('published package surface', () => {
         rmSync(root, { recursive: true, force: true })
       }
     },
-    45_000,
+    150_000,
   )
 
   it('builds public Host plugins and their private native bootstraps', () => {
