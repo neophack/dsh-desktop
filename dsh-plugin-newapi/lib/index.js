@@ -283,6 +283,20 @@ var NewApiClient = class {
     }
     this.learnUser(data.user);
   }
+  /**
+   * Generate a fresh long-lived system access token ("访问令牌") via
+   * `GET /api/user/token`. The server returns the raw value exactly once —
+   * here — and regenerating instantly invalidates every previous access
+   * token, so the caller must persist the returned value before relying on
+   * it. Requires an authenticated client (session cookie or bearer).
+   */
+  async getAccessToken(signal) {
+    await this.ensureFreshBearer(signal);
+    const data = await this.get("/api/user/token", signal);
+    const value = typeof data === "string" ? data.trim() : "";
+    if (value === "") throw new NewApiError("newapi: server returned an empty access token");
+    return value;
+  }
   ensureFreshBearer(signal) {
     if (this.auth?.kind === "token") return Promise.resolve();
     const horizon = Math.floor(Date.now() / 1e3) + 60;
@@ -460,15 +474,27 @@ var Config = z.object({
    * Context window (tokens) applied to every synced model that has no explicit
    * per-model limit; 0 disables the default. Users can change and save it.
    */
-  defaultContextWindow: z.number().default(DEFAULT_CONTEXT_WINDOW)
+  defaultContextWindow: z.number().default(DEFAULT_CONTEXT_WINDOW),
+  /**
+   * JSON string: the llm-pi-ai route profile stashed when the chat API key
+   * went missing and the route was hidden from the selector (schemastery has
+   * no object schema, hence the string). Restored verbatim once the key is
+   * back, so a key round-trip costs no network.
+   */
+  stashedRoute: z.string().default("")
 });
 var name = "dsh-plugin-newapi";
 var inject = ["settings", "credentials", "connection"];
 function ok(value) {
   return { ok: true, value };
 }
+var RPC_WIRE_CODES = /* @__PURE__ */ new Set(["bad-request", "cancelled", "internal"]);
 function fail(code, message) {
-  return { ok: false, error: { code, message, details: {} } };
+  const wireCode = code === "invalid-argument" ? "bad-request" : RPC_WIRE_CODES.has(code) ? code : "internal";
+  return { ok: false, error: { code: wireCode, message, details: { code } } };
+}
+function modelInputFor(limits, id) {
+  return limits[id]?.image === false ? ["text"] : ["text", "image"];
 }
 function readModelLimits(raw) {
   if (typeof raw !== "string" || raw === "") return {};
@@ -478,15 +504,26 @@ function readModelLimits(raw) {
     const limits = {};
     for (const [id, entry] of Object.entries(parsed)) {
       if (typeof entry !== "object" || entry === null) continue;
-      const { contextWindow, maxTokens } = entry;
+      const { contextWindow, maxTokens, image } = entry;
       const clean = {};
       if (typeof contextWindow === "number" && contextWindow > 0) clean.contextWindow = Math.floor(contextWindow);
       if (typeof maxTokens === "number" && maxTokens > 0) clean.maxTokens = Math.floor(maxTokens);
+      if (image === false) clean.image = false;
       if (Object.keys(clean).length > 0) limits[id] = clean;
     }
     return limits;
   } catch {
     return {};
+  }
+}
+function readStashedRoute(raw) {
+  if (typeof raw !== "string" || raw === "") return void 0;
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return void 0;
+    return parsed;
+  } catch {
+    return void 0;
   }
 }
 function apply(ctx, config = {}) {
@@ -517,7 +554,10 @@ function apply(ctx, config = {}) {
   const currentCredential = async () => {
     const hit = await ctx.credentials.resolve(sessionRef);
     if (typeof hit?.value !== "string" || hit.value.length === 0) return void 0;
-    return { kind: stored().authKind === "session" ? "session" : "refresh", value: hit.value };
+    const kind = stored().authKind;
+    if (kind === "token") return { kind: "token", value: hit.value };
+    if (kind === "session") return { kind: "session", value: hit.value };
+    return { kind: "refresh", value: hit.value };
   };
   const describeError = (error) => {
     if (error instanceof NewApiError) return error.message;
@@ -529,6 +569,8 @@ function apply(ctx, config = {}) {
       baseUrl: currentBaseUrl(),
       auth: void 0,
       onSessionRotated: (value) => {
+        const kind = stored().authKind;
+        if (kind === "token" || kind === "") return;
         void ctx.credentials.set(sessionRef, value).catch((error) => {
           logger.warn(`newapi: persisting rotated session failed: ${describeError(error)}`);
         });
@@ -567,8 +609,28 @@ function apply(ctx, config = {}) {
   ctx.effect(() => () => {
     clearNativeLogin();
   }, "newapi: embedded login cleanup");
-  async function persistLogin(client, baseUrl, user, kind) {
-    await ctx.credentials.set(sessionRef, client.authCookieValue() ?? "");
+  async function ensureAccessToken(client, baseUrl, user) {
+    const cached = await currentCredential();
+    if (cached?.kind === "token" && baseUrl === currentBaseUrl()) {
+      const probe = new NewApiClient({ baseUrl, auth: { kind: "token", value: cached.value } });
+      const probed = await probe.getUser().catch(() => void 0);
+      if (probed !== void 0 && probed.id === user.id) return "token";
+    }
+    const token = await client.getAccessToken();
+    await ctx.credentials.set(sessionRef, token);
+    logger.info("newapi: generated and cached a fresh system access token");
+    return "token";
+  }
+  async function persistLogin(client, baseUrl, user, cookieKind) {
+    let kind = cookieKind;
+    try {
+      kind = await ensureAccessToken(client, baseUrl, user);
+    } catch (error) {
+      logger.warn(`newapi: securing the access token failed, storing the ${cookieKind} cookie instead: ${describeError(error)}`);
+    }
+    if (kind !== "token") {
+      await ctx.credentials.set(sessionRef, client.authCookieValue() ?? "");
+    }
     await scope.update({ baseUrl, authKind: kind });
     snapshotClient = void 0;
     snapshotClientKey = "";
@@ -626,6 +688,14 @@ function apply(ctx, config = {}) {
     } finally {
       attempt.busy = false;
     }
+  }
+  async function signOutDeadCredential() {
+    await ctx.credentials.unset(sessionRef);
+    await scope.update({ authKind: "" });
+    snapshotClient = void 0;
+    snapshotClientKey = "";
+    invalidateSnapshot();
+    logger.warn("newapi: stored credential rejected (401; token replaced server-side); signed out \u2014 sign in again to fetch a fresh token");
   }
   async function resolveLoginUrl(baseUrl, info) {
     const provider = info.oauthProviders.find((row) => row.slug === "feishu" && row.authorizationEndpoint !== void 0 && row.clientId !== void 0) ?? info.oauthProviders.find((row) => row.authorizationEndpoint !== void 0 && row.clientId !== void 0);
@@ -821,6 +891,10 @@ function apply(ctx, config = {}) {
           rateLimitedUntil = Date.now() + Math.max(RATE_LIMIT_COOLDOWN_MS, sharedCooldownRemaining());
           return fail("rate-limited", "newapi: server rate limit (429) hit; wait a moment before retrying");
         }
+        if (error instanceof NewApiError && error.status === 401) {
+          await signOutDeadCredential();
+          return fail("token-expired", "the access token was replaced on the server (another sign-in or a web regeneration); signed out \u2014 please sign in again");
+        }
         return fail("fetch-failed", describeError(error));
       }
     })();
@@ -891,6 +965,10 @@ function apply(ctx, config = {}) {
     delete clone.access_token;
     return clone;
   }
+  function maskSecret(value) {
+    if (value.length <= 8) return "****";
+    return `${value.slice(0, 4)}****${value.slice(-4)}`;
+  }
   function redactTokens(tokens) {
     return tokens.map((token) => ({
       ...token,
@@ -933,6 +1011,8 @@ function apply(ctx, config = {}) {
         modelLimits: readModelLimits(storedConfig.modelLimits),
         defaultContextWindow: currentDefaultContextWindow(),
         authKind: storedConfig.authKind ?? "",
+        /** Masked head+tail of the cached system access token; only with token auth. */
+        accessTokenMasked: credential?.kind === "token" ? maskSecret(credential.value) : void 0,
         tokenConfigured: sessionConfigured && credential !== void 0,
         apiKeyConfigured,
         route,
@@ -1020,9 +1100,9 @@ function apply(ctx, config = {}) {
       });
       try {
         const user = await client.loginWithPassword(username, password, signal);
-        const kind = client.sessionValue() !== void 0 ? "session" : "refresh";
+        const cookieKind = client.sessionValue() !== void 0 ? "session" : "refresh";
         if (client.authCookieValue() === void 0) return fail("login-failed", "server did not establish a session");
-        await persistLogin(client, normalized, user, kind);
+        const kind = await persistLogin(client, normalized, user, cookieKind);
         return ok({ authKind: kind, user: redactUser(user) });
       } catch (error) {
         return fail("login-failed", describeError(error));
@@ -1032,7 +1112,7 @@ function apply(ctx, config = {}) {
     "config.clear": async () => {
       await ctx.credentials.unset(ref);
       await ctx.credentials.unset(sessionRef);
-      await scope.update({ authKind: "" });
+      await scope.update({ authKind: "", stashedRoute: "" });
       await removeRouteFromCatalog("signed out");
       snapshotClient = void 0;
       snapshotClientKey = "";
@@ -1098,11 +1178,24 @@ function apply(ctx, config = {}) {
      * `providers.<route>` so the shipped pi-ai adapter registers the chat
      * route. The token is *referenced* (apiKeyEnv), never copied. Stored
      * per-model limits (contextWindow / maxTokens) ride along on each entry
-     * so DSH sizes requests to the real model capability.
+     * so DSH sizes requests to the real model capability, and every entry
+     * declares its input modalities explicitly — image input ON by default,
+     * opt out per model via `models.setLimit` — so `read_image` works without
+     * waiting for a catalog that can never describe gateway-served models.
      */
     "models.sync": async (payload, signal) => {
       if (ctx.settings.get(LLM_PI_AI_NS) === void 0) {
         return fail("adapter-missing", "the llm-pi-ai settings namespace is not registered; install or enable @deepseek-ai/dsh-llm-pi-ai in this profile");
+      }
+      let keyConfigured = false;
+      try {
+        keyConfigured = (await ctx.credentials.describe(ref)).configured;
+      } catch {
+        keyConfigured = false;
+      }
+      if (!keyConfigured) {
+        await reconcileCatalogVisibility("api key missing at sync");
+        return fail("not-configured", "no NewAPI chat API key stored; sign in first \u2014 the chat model selector never offers key-less models");
       }
       const limit = readSyncLimit(payload);
       const result = await fetchSnapshot(signal);
@@ -1111,13 +1204,17 @@ function apply(ctx, config = {}) {
       if (snapshot.models.length === 0) return fail("no-models", "newapi returned no visible models");
       const limits = readModelLimits(stored().modelLimits);
       const defaultContextWindow = currentDefaultContextWindow();
-      const models = (limit === void 0 ? snapshot.models : snapshot.models.slice(0, limit)).map((model) => ({
-        id: model.id,
-        // Explicit per-model limits win; otherwise the default context window
-        // (128k out of the box) sizes requests for models the gateway can't
-        // describe. 0 disables the default.
-        ...limits[model.id] ?? (defaultContextWindow > 0 ? { contextWindow: defaultContextWindow } : {})
-      }));
+      const models = (limit === void 0 ? snapshot.models : snapshot.models.slice(0, limit)).map((model) => {
+        const { image: _image, ...storedLimits } = limits[model.id] ?? {};
+        return {
+          id: model.id,
+          // Explicit per-model limits win; otherwise the default context window
+          // (128k out of the box) sizes requests for models the gateway can't
+          // describe. 0 disables the default.
+          ...Object.keys(storedLimits).length > 0 ? storedLimits : defaultContextWindow > 0 ? { contextWindow: defaultContextWindow } : {},
+          input: modelInputFor(limits, model.id)
+        };
+      });
       const baseURL = `${currentBaseUrl().replace(/\/+$/, "")}/v1`;
       const profile = {
         displayName,
@@ -1127,12 +1224,17 @@ function apply(ctx, config = {}) {
         models
       };
       await ctx.settings.update(LLM_PI_AI_NS, { providers: { [route]: profile } });
+      if (stored().stashedRoute !== "") {
+        await scope.update({ stashedRoute: "" });
+      }
       return ok({ route, count: models.length, baseURL });
     },
     /**
      * Set (or clear, with non-positive/absent values) one model's capability
      * limits, persist them in the newapi settings namespace, and re-sync the
-     * llm-pi-ai profile so the limits take effect immediately.
+     * llm-pi-ai profile so the limits take effect immediately. An explicit
+     * `image` boolean toggles the image-input declaration the next sync
+     * writes; absent leaves the stored flag alone (default ON).
      */
     "models.setLimit": async (payload) => {
       const input = payload ?? {};
@@ -1152,6 +1254,8 @@ function apply(ctx, config = {}) {
       else delete entry.contextWindow;
       if (maxTokens !== void 0) entry.maxTokens = maxTokens;
       else delete entry.maxTokens;
+      if (input.image === false) entry.image = false;
+      else if (input.image === true) delete entry.image;
       if (Object.keys(entry).length === 0) delete limits[input.id];
       else limits[input.id] = entry;
       await scope.update({ modelLimits: JSON.stringify(limits) });
@@ -1186,6 +1290,68 @@ function apply(ctx, config = {}) {
       logger.warn(`newapi: removing the key-less route failed: ${describeError(error)}`);
     }
   }
+  let reconcileInFlight;
+  function reconcileCatalogVisibility(reason) {
+    if (reconcileInFlight !== void 0) return reconcileInFlight;
+    const flight = (async () => {
+      try {
+        let keyConfigured = false;
+        try {
+          keyConfigured = (await ctx.credentials.describe(ref)).configured;
+        } catch {
+          keyConfigured = false;
+        }
+        const section = ctx.settings.get(LLM_PI_AI_NS);
+        const hasRoute = section?.providers !== void 0 && route in section.providers;
+        if (!keyConfigured) {
+          if (!hasRoute) return;
+          const stashed = section?.providers?.[route];
+          await scope.update({
+            stashedRoute: typeof stashed === "object" && stashed !== null ? JSON.stringify(stashed) : ""
+          });
+          await removeRouteFromCatalog(reason);
+          return;
+        }
+        if (hasRoute) return;
+        const stash = readStashedRoute(stored().stashedRoute);
+        if (stash === void 0) return;
+        await ctx.settings.update(LLM_PI_AI_NS, {
+          providers: { [route]: stash }
+        });
+        await scope.update({ stashedRoute: "" });
+        logger.info(`newapi: restored the chat route "${route}" from the stash (${reason})`);
+      } catch (error) {
+        logger.warn(`newapi: reconciling the chat route visibility failed: ${describeError(error)}`);
+      }
+    })();
+    reconcileInFlight = flight;
+    void flight.finally(() => {
+      reconcileInFlight = void 0;
+    });
+    return flight;
+  }
+  ctx.on("credentials/reference-updated", (changed) => {
+    if (changed !== ref && String(changed) !== apiKeyEnv) return;
+    void reconcileCatalogVisibility("api key credential changed");
+  });
+  async function ensureAccessTokenStored() {
+    try {
+      const baseUrl = currentBaseUrl();
+      if (baseUrl === "") return;
+      const credential = await currentCredential();
+      if (credential === void 0 || credential.kind === "token") return;
+      const client = snapshotClientFor(baseUrl, credential);
+      const user = await client.getUser();
+      const token = await client.getAccessToken();
+      await ctx.credentials.set(sessionRef, token);
+      await scope.update({ authKind: "token" });
+      snapshotClient = void 0;
+      snapshotClientKey = "";
+      logger.info(`newapi: migrated the stored ${credential.kind} cookie to a system access token`);
+    } catch (error) {
+      logger.warn(`newapi: access-token migration deferred (keeping the cookie credential): ${describeError(error)}`);
+    }
+  }
   async function ensureApiKeyStored() {
     try {
       const described = await ctx.credentials.describe(ref);
@@ -1202,18 +1368,40 @@ function apply(ctx, config = {}) {
       logger.warn(`newapi: restoring the chat API key failed: ${describeError(error)}`);
     }
   }
-  async function hideRouteWhenKeyMissing() {
+  async function healStoredRouteLimits() {
     try {
-      const described = await ctx.credentials.describe(ref);
-      if (described.configured) return;
-      await removeRouteFromCatalog("api key missing at startup");
+      const defaultContextWindow = currentDefaultContextWindow();
+      const section = ctx.settings.get(LLM_PI_AI_NS);
+      const routeProfile = section?.providers?.[route];
+      if (routeProfile === void 0 || !Array.isArray(routeProfile.models) || routeProfile.models.length === 0) return;
+      const limits = readModelLimits(stored().modelLimits);
+      const healed = routeProfile.models.map((model) => {
+        if (typeof model !== "object" || model === null) return model;
+        const entry = model;
+        if (typeof entry.id !== "string") return model;
+        let next = entry;
+        if (defaultContextWindow > 0 && typeof entry.contextWindow !== "number") {
+          next = { ...next, contextWindow: limits[entry.id]?.contextWindow ?? defaultContextWindow };
+        }
+        if (!Array.isArray(entry.input)) {
+          next = { ...next, input: modelInputFor(limits, entry.id) };
+        }
+        return next === entry ? model : next;
+      });
+      if (healed.every((model, index) => model === routeProfile.models?.[index])) return;
+      await ctx.settings.update(LLM_PI_AI_NS, {
+        providers: { [route]: { ...routeProfile, models: healed } }
+      });
+      logger.info("newapi: stamped missing context windows / input modalities onto stored models");
     } catch (error) {
-      logger.warn(`newapi: startup catalog guard failed: ${describeError(error)}`);
+      logger.warn(`newapi: healing stored model limits failed: ${describeError(error)}`);
     }
   }
   void (async () => {
+    await ensureAccessTokenStored();
     await ensureApiKeyStored();
-    await hideRouteWhenKeyMissing();
+    await reconcileCatalogVisibility("api key missing at startup");
+    await healStoredRouteLimits();
   })();
   logger.info(`newapi: ready (route=${route}, apiKeyEnv=${apiKeyEnv})`);
 }

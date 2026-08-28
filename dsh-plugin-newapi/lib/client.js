@@ -157,6 +157,8 @@ var zh = {
   loading: "\u52A0\u8F7D\u4E2D...",
   account: "\u8D26\u6237",
   usernameLabel: "\u7528\u6237",
+  accessTokenLabel: "\u8BBF\u95EE\u4EE4\u724C",
+  accessTokenHint: "\u5DF2\u7F13\u5B58\u4E8E\u672C\u673A, \u4EC5\u663E\u793A\u9996\u5C3E; \u91CD\u65B0\u767B\u5F55\u65F6\u81EA\u52A8\u590D\u7528, \u5931\u6548\u624D\u91CD\u65B0\u751F\u6210\u3002",
   email: "\u90AE\u7BB1",
   group: "\u5206\u7EC4",
   requests: "\u8BF7\u6C42\u6570",
@@ -191,6 +193,7 @@ var zh = {
   syncNeedsConfig: "\u8BF7\u5148\u5B8C\u6210\u767B\u5F55\u3002",
   syncLimit: "\u6570\u91CF\u4E0A\u9650(\u53EF\u9009)",
   modelLimits: "\u4E0A\u4E0B\u6587 / \u6700\u5927\u8F93\u51FA",
+  modelImage: "\u652F\u6301\u56FE\u7247",
   editLimit: "\u8BBE\u7F6E",
   saveLimit: "\u4FDD\u5B58",
   cancelLimit: "\u53D6\u6D88",
@@ -254,6 +257,8 @@ var en = {
   loading: "Loading...",
   account: "Account",
   usernameLabel: "User",
+  accessTokenLabel: "Access token",
+  accessTokenHint: "Cached locally, shown masked; reused on re-login, regenerated only when it stops working.",
   email: "Email",
   group: "Group",
   requests: "Requests",
@@ -288,6 +293,7 @@ var en = {
   syncNeedsConfig: "Sign in first.",
   syncLimit: "Limit (optional)",
   modelLimits: "Context / Max out",
+  modelImage: "Image input",
   editLimit: "Set",
   saveLimit: "Save",
   cancelLimit: "Cancel",
@@ -974,7 +980,8 @@ function NewApiSettings(props) {
     const result = await call("models.setLimit", {
       id: editing.id,
       contextWindow: parse(editing.contextWindow),
-      maxTokens: parse(editing.maxTokens)
+      maxTokens: parse(editing.maxTokens),
+      image: editing.image
     });
     setBusy(false);
     if (!result.ok) {
@@ -1193,6 +1200,13 @@ function NewApiSettings(props) {
             snapshot.user?.display_name ?? snapshot.user?.username ?? String(snapshot.user?.id ?? "--"),
             snapshot.user?.email !== void 0 && snapshot.user.email !== "" ? ` <${snapshot.user.email}>` : ""
           ] }),
+          config?.accessTokenMasked !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { style: { color: "var(--dsw-alias-label-secondary, inherit)" }, children: t("accessTokenLabel") }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("dd", { style: { margin: 0 }, children: [
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("code", { style: { fontSize: 12 }, children: config.accessTokenMasked }),
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { style: { color: "var(--dsw-alias-label-tertiary, inherit)", fontSize: 12 }, children: t("accessTokenHint") })
+            ] })
+          ] }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { style: { color: "var(--dsw-alias-label-secondary, inherit)" }, children: t("group") }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dd", { style: { margin: 0 }, children: snapshot.user?.group ?? "--" }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { style: { color: "var(--dsw-alias-label-secondary, inherit)" }, children: t("requests") }),
@@ -1254,6 +1268,7 @@ function NewApiSettings(props) {
             /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { style: { padding: 4 }, children: t("modelInput") }),
             /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { style: { padding: 4 }, children: t("modelOutput") }),
             /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { style: { padding: 4 }, children: t("modelLimits") }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { style: { padding: 4 }, children: t("modelImage") }),
             /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { style: { padding: 4 } })
           ] }) }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("tbody", { children: models.map((model) => {
@@ -1297,12 +1312,28 @@ function NewApiSettings(props) {
                     setEditing({
                       id: model.id,
                       contextWindow: String(config?.defaultContextWindow ?? 131072),
-                      maxTokens: ""
+                      maxTokens: "",
+                      image: true
                     });
                   },
                   children: t("defaultLimitDisplay", { window: String(config?.defaultContextWindow ?? 131072) })
                 }
               ) : `${storedLimit.contextWindow !== void 0 ? String(storedLimit.contextWindow) : "?"} / ${storedLimit.maxTokens !== void 0 ? String(storedLimit.maxTokens) : "?"}` }),
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { style: { padding: 4, whiteSpace: "nowrap" }, children: editingThis && editing !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("label", { title: t("modelImage"), style: { display: "inline-flex", alignItems: "center", cursor: "pointer" }, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+                "input",
+                {
+                  type: "checkbox",
+                  checked: editing.image,
+                  onChange: (event) => setEditing({ ...editing, image: event.target.checked })
+                }
+              ) }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+                "span",
+                {
+                  title: t("modelImage"),
+                  style: { color: storedLimit?.image === false ? "var(--dsw-alias-label-tertiary, inherit)" : "inherit" },
+                  children: storedLimit?.image === false ? "\u2014" : "\u2713"
+                }
+              ) }),
               /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { style: { padding: 4, whiteSpace: "nowrap" }, children: editingThis ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { style: { display: "inline-flex", gap: 6 }, children: [
                 /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "primary", disabled: busy, onClick: () => void onSaveLimit(), children: t("saveLimit") }),
                 /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Button, { size: "sm", disabled: busy, onClick: () => setEditing(void 0), children: t("cancelLimit") })
@@ -1310,7 +1341,8 @@ function NewApiSettings(props) {
                 setEditing({
                   id: model.id,
                   contextWindow: storedLimit?.contextWindow !== void 0 ? String(storedLimit.contextWindow) : "",
-                  maxTokens: storedLimit?.maxTokens !== void 0 ? String(storedLimit.maxTokens) : ""
+                  maxTokens: storedLimit?.maxTokens !== void 0 ? String(storedLimit.maxTokens) : "",
+                  image: storedLimit?.image !== false
                 });
               }, children: t("editLimit") }) })
             ] }, model.id);

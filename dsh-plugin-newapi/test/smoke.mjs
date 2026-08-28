@@ -3,6 +3,7 @@
  * of the NewAPI management API (v1.0.0-rc.x wire shapes) and assert:
  *  - public server status parsing (custom OAuth providers, quota_per_unit),
  *  - password login -> session cookie -> /api/user/auth/refresh -> bearer,
+ *  - system access token minting (GET /api/user/token) and Bearer-only use,
  *  - session rotation persistence via onSessionRotated,
  *  - embedded OAuth flow: /api/oauth/state minted in the client jar, code
  *    exchange with the same jar authenticates (the Host's zero-paste login),
@@ -25,6 +26,9 @@ let counter = 0
 const sessions = new Set()
 const stateBySession = new Map()
 const bearers = new Set()
+/** System access tokens ("访问令牌") minted through GET /api/user/token. */
+const personalTokens = new Set()
+let currentPat = ''
 const createdTokens = []
 let emptyTokens = false
 let sawNewApiUserHeader = false
@@ -150,7 +154,7 @@ const server = createServer((req, res) => {
   // Everything below requires a bearer (personal token or minted access token).
   const auth = req.headers.authorization ?? ''
   const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : ''
-  const authorized = bearer === PERSONAL_TOKEN || bearers.has(bearer)
+  const authorized = bearer === PERSONAL_TOKEN || bearers.has(bearer) || personalTokens.has(bearer)
   if (!authorized) {
     deny('无权进行此操作，未登录...')
     return
@@ -160,6 +164,14 @@ const server = createServer((req, res) => {
 
   if (req.method === 'GET' && req.url === '/api/user/self') {
     send(USER)
+  } else if (req.method === 'GET' && req.url === '/api/user/token') {
+    // GenerateAccessToken: ensure semantics — same token until replaced.
+    if (currentPat === '') {
+      counter += 1
+      currentPat = `pat${String(counter)}-system-access`
+      personalTokens.add(currentPat)
+    }
+    send(currentPat)
   } else if (req.method === 'POST' && req.url === '/api/token/') {
     // Create: appends a token and returns bare success (wire shape of AddToken).
     let body = ''
@@ -279,6 +291,14 @@ try {
   const tokenClient = new NewApiClient({ baseUrl: base, auth: { kind: 'token', value: PERSONAL_TOKEN } })
   const tokenUser = await tokenClient.getUser()
   check('personal token authenticates', tokenUser.group === 'vip')
+
+  // 4b. A session-authed client mints the long-lived system access token
+  //     (GET /api/user/token); the value authenticates a fresh client with no
+  //     cookie and no refresh exchange.
+  const mintedPat = await login.getAccessToken()
+  check('system access token minted from the session', typeof mintedPat === 'string' && mintedPat !== '')
+  const patClient = new NewApiClient({ baseUrl: base, auth: { kind: 'token', value: mintedPat } })
+  check('minted access token authenticates', (await patClient.getUser()).username === USER.username)
 
   // 5. Data endpoints via the token client.
   const tokens = await tokenClient.getTokens()

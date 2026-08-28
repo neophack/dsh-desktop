@@ -52,6 +52,7 @@ let handler
 const makeCtx = () => ({
   logger: { info: () => {}, warn: () => {}, debug: () => {} },
   effect: (fn) => { const dispose = fn(); disposers.push(dispose); return () => {} },
+  on: () => () => {},
   settings: {
     register: () => scope,
     get: () => undefined,

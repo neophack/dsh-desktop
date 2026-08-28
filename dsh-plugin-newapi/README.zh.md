@@ -11,7 +11,7 @@
 
 ## 登录方式
 
-NewAPI v1.0.0-rc.x 的认证由「session cookie + 短期 Bearer（`POST /api/user/auth/refresh` 换发）」组成。插件支持两条路：
+登录动作本身走 NewAPI 的浏览器流程（`session` cookie + 短期 Bearer），但插件最终保存的持久凭据是**长效系统访问令牌**（「访问令牌」）：登录成功后 Host 优先复用本地缓存、且仍能认证同一账号的令牌；没有缓存（或已失效）时通过 `GET /api/user/token` 新建一个（该值仅显示一次，且重新生成会使旧令牌全部失效——所以只在必要时生成一次并缓存）。之后所有数据读取（用量、密钥、模型、定价）直接携带 `Authorization: Bearer <访问令牌>`——不再构造 cookie，也不再触碰限速敏感的 `POST /api/user/auth/refresh` 换发接口，避免被服务器 429。仍持有 cookie 凭据的存量安装会在启动时自动迁移。若令牌之后在服务端被替换（其他设备登录、或在网页上重新生成），插件不会去「抢」：下一次读取会直接退出登录（聊天 API key 相互独立、不受影响），由你重新登录获取新令牌——多个登录方各自自动重铸会令单例令牌无限轮换，把服务器打成 429。登录握手支持两条路：
 
 1. **独立登录窗口（默认且唯一入口，零复制粘贴）**：点「使用飞书登录」后，插件先在服务端创建 OAuth state，再把**飞书授权页**在独立弹出的登录窗口中打开（redirect_uri 指回服务器自身，交换必然成功，无需任何管理端配置）。扫码授权后 session cookie 以顶级导航落入 DSH Desktop 的 Electron 默认会话（跨站 iframe 内的 XHR Set-Cookie 会被浏览器的 SameSite 规则丢弃，所以必须是独立窗口），Host 侧自动读取、验证并持久化；随后自动拉取套餐/用量，并**自动确保一个 API key**（账号没有 key 就新建一个，有就用第一个）存入聊天凭据引用。登录窗口提前关闭会立刻反馈「登录未完成」，可随时重试。仅在 DSH Desktop 内可用（需要 Electron 会话访问权）；普通 `dsh` CLI 环境会提示不支持。
 2. **密码登录**（服务器开启密码登录时可用）：填用户名密码，插件自动完成 login → refresh → 存储会话，之后自动续期。
@@ -26,6 +26,8 @@ NewAPI v1.0.0-rc.x 的认证由「session cookie + 短期 Bearer（`POST /api/us
 - **浏览器面**（`lib/client.js`）：`settings.section` slot 贡献（设置里的「NewAPI」页），基于共享 UI 原语构建。
 
 模型同步**不会**注册一个平行的 LLM 适配器：它把 provider profile 写进随产品发布的 `@deepseek-ai/dsh-llm-pi-ai` settings namespace（`providers.<route>`）——这是接入 OpenAI 兼容网关的官方途径。聊天模型选择器、目录合并、重试策略全部照常工作。令牌按环境变量名引用，不会被复制进配置。
+
+**没有 API key 的模型不会出现在选择器里**：选择器菜单完全由 `llm-pi-ai` 目录驱动，插件因此监听聊天 key（`NEWAPI_API_KEY`）的凭据提交事件（`credentials/reference-updated`，也正是选择器目录刷新所依赖的事件）——key 缺失时立即把整条路由从目录中移除（profile 暂存于 `newapi` 命名空间，不丢失已同步的模型与限制），key 恢复时原样回填，全程无需网络。`models.sync` 也在无 key 时直接拒绝（`not-configured`），保证任何路径都写不进一条「无 key 路由」。手动删除该 provider 不受影响：暂存只由插件自己的隐藏动作写入，不会复活用户删掉的路由。
 
 额度换算优先使用服务器 `/api/status` 返回的 `quota_per_unit`（默认 500000，即 $1 = 500,000 配额单位），美元金额同时按 `usd_exchange_rate` 折算显示本币参考价。
 
@@ -65,10 +67,11 @@ dsh plugin --profile desktop add file:E:/dsh-desktop/dsh-plugin-newapi
 
 ## 安全说明
 
-- 凭据（访问令牌或 session 值）只保存在本机凭据存储（`$DSH_HOME/.credentials.yaml`，权限 0600），引用名为 `NEWAPI_API_KEY`。
+- 凭据（缓存的系统访问令牌，或旧式服务器的 session 值）只保存在本机凭据存储（`$DSH_HOME/.credentials.yaml`，权限 0600）：控制台凭据引用名为 `NEWAPI_SESSION`，聊天 API key 引用名为 `NEWAPI_API_KEY`。
 - 密钥明文绝不发给渲染进程；令牌列表只显示末 4 位。
 - `/newapi` RPC 通道仅限回环授权，与内置设置界面同一道边界。
-- 会话续期换发的新 session 值由 Host 自动写回凭据存储。
+- 系统访问令牌每次登录至多生成一次（重新生成会使旧令牌失效），本地缓存仍能认证同一账号时直接复用，失效后才重新生成。
+- 会话续期换发的新 session 值由 Host 自动写回凭据存储（仅旧式 cookie 回退流程）。
 - 内嵌登录的 cookie 捕获只在你主动点击「打开登录页」期间进行，只读取所配置服务器源上的 `session` 这一个 cookie，读到的值立即经服务器验证后进入凭据存储；捕获结束后停止监听。该能力依赖 DSH Desktop 的 Electron 会话，普通 CLI 环境自动禁用。
 
 ## 开发

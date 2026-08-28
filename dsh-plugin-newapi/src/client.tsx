@@ -45,11 +45,13 @@ interface ConfigView {
   passwordLogin: boolean
   /** Display currency for quota/price figures (default cny). */
   currency: Currency
-  /** Per-model capability limits (tokens), persisted host-side. */
-  modelLimits: Record<string, { contextWindow?: number, maxTokens?: number }>
+  /** Per-model capability limits (tokens) and the image-input opt-out, persisted host-side. */
+  modelLimits: Record<string, { contextWindow?: number, maxTokens?: number, image?: boolean }>
   /** Context window (tokens) applied to every model without explicit limits; 0 = none. */
   defaultContextWindow: number
   authKind: string
+  /** Masked head+tail of the cached system access token (token auth only). */
+  accessTokenMasked?: string
   tokenConfigured: boolean
   apiKeyConfigured: boolean
   route: string
@@ -291,6 +293,8 @@ const zh: Record<string, string> = {
   loading: '加载中...',
   account: '账户',
   usernameLabel: '用户',
+  accessTokenLabel: '访问令牌',
+  accessTokenHint: '已缓存于本机, 仅显示首尾; 重新登录时自动复用, 失效才重新生成。',
   email: '邮箱',
   group: '分组',
   requests: '请求数',
@@ -325,6 +329,7 @@ const zh: Record<string, string> = {
   syncNeedsConfig: '请先完成登录。',
   syncLimit: '数量上限(可选)',
   modelLimits: '上下文 / 最大输出',
+  modelImage: '支持图片',
   editLimit: '设置',
   saveLimit: '保存',
   cancelLimit: '取消',
@@ -388,6 +393,8 @@ const en: Record<string, string> = {
   loading: 'Loading...',
   account: 'Account',
   usernameLabel: 'User',
+  accessTokenLabel: 'Access token',
+  accessTokenHint: 'Cached locally, shown masked; reused on re-login, regenerated only when it stops working.',
   email: 'Email',
   group: 'Group',
   requests: 'Requests',
@@ -422,6 +429,7 @@ const en: Record<string, string> = {
   syncNeedsConfig: 'Sign in first.',
   syncLimit: 'Limit (optional)',
   modelLimits: 'Context / Max out',
+  modelImage: 'Image input',
   editLimit: 'Set',
   saveLimit: 'Save',
   cancelLimit: 'Cancel',
@@ -1170,8 +1178,8 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
   } = session
 
   const [syncLimit, setSyncLimit] = useState('')
-  /** Inline per-model limit editor ({ id } plus raw input strings). */
-  const [editing, setEditing] = useState<{ id: string, contextWindow: string, maxTokens: string } | undefined>(undefined)
+  /** Inline per-model limit editor ({ id } plus raw input strings and the image toggle). */
+  const [editing, setEditing] = useState<{ id: string, contextWindow: string, maxTokens: string, image: boolean } | undefined>(undefined)
   const limits = config?.modelLimits ?? {}
   /** Full keys revealed on demand, keyed by token id. */
   const [revealed, setRevealed] = useState<Record<number, string>>({})
@@ -1190,6 +1198,7 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
       id: editing.id,
       contextWindow: parse(editing.contextWindow),
       maxTokens: parse(editing.maxTokens),
+      image: editing.image,
     })
     setBusy(false)
     if (!result.ok) {
@@ -1432,6 +1441,15 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
                 {snapshot.user?.display_name ?? snapshot.user?.username ?? String(snapshot.user?.id ?? '--')}
                 {snapshot.user?.email !== undefined && snapshot.user.email !== '' ? ` <${snapshot.user.email}>` : ''}
               </dd>
+              {config?.accessTokenMasked !== undefined && (
+                <>
+                  <dt style={{ color: 'var(--dsw-alias-label-secondary, inherit)' }}>{t('accessTokenLabel')}</dt>
+                  <dd style={{ margin: 0 }}>
+                    <code style={{ fontSize: 12 }}>{config.accessTokenMasked}</code>
+                    <div style={{ color: 'var(--dsw-alias-label-tertiary, inherit)', fontSize: 12 }}>{t('accessTokenHint')}</div>
+                  </dd>
+                </>
+              )}
               <dt style={{ color: 'var(--dsw-alias-label-secondary, inherit)' }}>{t('group')}</dt>
               <dd style={{ margin: 0 }}>{snapshot.user?.group ?? '--'}</dd>
               <dt style={{ color: 'var(--dsw-alias-label-secondary, inherit)' }}>{t('requests')}</dt>
@@ -1524,6 +1542,7 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
                     <th style={{ padding: 4 }}>{t('modelInput')}</th>
                     <th style={{ padding: 4 }}>{t('modelOutput')}</th>
                     <th style={{ padding: 4 }}>{t('modelLimits')}</th>
+                    <th style={{ padding: 4 }}>{t('modelImage')}</th>
                     <th style={{ padding: 4 }} />
                   </tr>
                 </thead>
@@ -1570,6 +1589,7 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
                                         id: model.id,
                                         contextWindow: String(config?.defaultContextWindow ?? 131072),
                                         maxTokens: '',
+                                        image: true,
                                       })
                                     }}
                                   >
@@ -1577,6 +1597,26 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
                                   </span>
                                 )
                               : `${storedLimit.contextWindow !== undefined ? String(storedLimit.contextWindow) : '?'} / ${storedLimit.maxTokens !== undefined ? String(storedLimit.maxTokens) : '?'}`}
+                        </td>
+                        <td style={{ padding: 4, whiteSpace: 'nowrap' }}>
+                          {editingThis && editing !== undefined
+                            ? (
+                                <label title={t('modelImage')} style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={editing.image}
+                                    onChange={(event: ChangeEvent<HTMLInputElement>) => setEditing({ ...editing, image: event.target.checked })}
+                                  />
+                                </label>
+                              )
+                            : (
+                                <span
+                                  title={t('modelImage')}
+                                  style={{ color: storedLimit?.image === false ? 'var(--dsw-alias-label-tertiary, inherit)' : 'inherit' }}
+                                >
+                                  {storedLimit?.image === false ? '—' : '✓'}
+                                </span>
+                              )}
                         </td>
                         <td style={{ padding: 4, whiteSpace: 'nowrap' }}>
                           {editingThis
@@ -1592,6 +1632,7 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
                                     id: model.id,
                                     contextWindow: storedLimit?.contextWindow !== undefined ? String(storedLimit.contextWindow) : '',
                                     maxTokens: storedLimit?.maxTokens !== undefined ? String(storedLimit.maxTokens) : '',
+                                    image: storedLimit?.image !== false,
                                   })
                                 }}>{t('editLimit')}</Button>
                               )}

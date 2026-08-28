@@ -11,6 +11,14 @@
  * terminal ok/error was unobservable and the login UI hung forever. Also
  * pins the cookie-watch cadence (the ticker once ran at ~1ms) and the
  * top-level login-window lifecycle (open on start, close on capture/cancel).
+ * Plus the access-token credential flow: login mints the long-lived system
+ * access token (GET /api/user/token) once and caches it (authKind 'token'),
+ * every later usage snapshot authenticates with that Bearer (zero further
+ * /api/user/auth/refresh exchanges), and when the token is replaced
+ * server-side the plugin SIGNS OUT instead of fighting for it — automatic
+ * re-mints from several logged-in clients would rotate the single token
+ * endlessly and 429 the server. A deliberate re-login fetches the fresh
+ * token.
  */
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -24,6 +32,12 @@ const USER = { id: 42, username: 'root', display_name: 'Root', email: 'root@exam
 /** Valid `new_api_refresh` cookie values (rc.2x wire shape). */
 const VALID_SESSIONS = new Set(['nar-signin.a.b', 'nar-stale.a.b'])
 const mintedBearers = new Set()
+/** The account's CURRENT system access token (ensure semantics: one at a time). */
+let currentAccessToken = ''
+const accessTokens = new Set()
+let refreshExchanges = 0
+let accessTokensMinted = 0
+let sawSelfOverAccessToken = false
 
 const server = createServer((req, res) => {
   const send = (data, extraHeaders = {}) => {
@@ -51,6 +65,7 @@ const server = createServer((req, res) => {
   }
   if (req.method === 'POST' && req.url === '/api/user/auth/refresh') {
     if (refreshCookie === undefined || !VALID_SESSIONS.has(refreshCookie)) { deny('not logged in'); return }
+    refreshExchanges += 1
     const token = `bearer.${String(mintedBearers.size + 1)}.sig`
     mintedBearers.add(token)
     // rc.2x servers rotate the refresh cookie on every exchange.
@@ -58,8 +73,22 @@ const server = createServer((req, res) => {
       { 'set-cookie': `new_api_refresh=${refreshCookie}; Path=/api/user/auth; HttpOnly; SameSite=Strict` })
     return
   }
-  if (!mintedBearers.has(bearer)) { deny('not logged in'); return }
-  if (req.method === 'GET' && req.url === '/api/user/self') { send(USER); return }
+  if (!mintedBearers.has(bearer) && !accessTokens.has(bearer)) { deny('not logged in'); return }
+  if (req.method === 'GET' && req.url === '/api/user/self') {
+    if (accessTokens.has(bearer)) sawSelfOverAccessToken = true
+    send(USER); return
+  }
+  if (req.method === 'GET' && req.url === '/api/user/token') {
+    // GenerateAccessToken (this deployment): ensure semantics — return the
+    // account's CURRENT token, minting one only when none exists.
+    if (currentAccessToken === '') {
+      accessTokensMinted += 1
+      currentAccessToken = `pat-${String(accessTokensMinted)}.system-access`
+      accessTokens.add(currentAccessToken)
+    }
+    send(currentAccessToken)
+    return
+  }
   if (req.method === 'GET' && req.url?.startsWith('/api/token/?')) {
     send({ items: [{ id: 1, name: 'default', key: 'sk-tail', quota: -1, used_quota: 0, models: '-1', expired_time: -1 }] })
     return
@@ -89,6 +118,7 @@ let handler
 const ctx = {
   logger: { info: () => {}, warn: (message) => { warns.push(String(message)) }, debug: () => {} },
   effect: (fn) => { const dispose = fn(); disposers.push(dispose); return () => {} },
+  on: () => () => {},
   settings: {
     register: (_ns, _schema, _options) => scope,
     get: (ns) => (ns === 'llm-pi-ai' ? llmSettings : undefined),
@@ -155,7 +185,11 @@ try {
   check('status ok observable (regression: settle kept the result)', okStatus.status === 'ok')
   check('ok carries the user', okStatus.user?.username === 'root')
   check('login window closed on capture', win.destroyed === true)
-  check('session credential persisted', credentialsStore.get('NEWAPI_SESSION') !== undefined)
+  const storedCredential = credentialsStore.get('NEWAPI_SESSION')
+  check('access token persisted (not the cookie value)', typeof storedCredential === 'string' && storedCredential.startsWith('pat-')
+    && storedCredential !== 'nar-signin.a.b')
+  check('authKind stored as token', settingsStore.authKind === 'token')
+  check('exactly one access-token generation for the login', accessTokensMinted === 1)
   check('chat api key persisted', credentialsStore.get('NEWAPI_API_KEY') === 'sk-full-key')
   const autoSynced = llmSettings.providers?.newapi
   check('login auto-synced models to the chat catalog', autoSynced !== undefined
@@ -170,6 +204,44 @@ try {
   check('status idle after ack', (await status()).status === 'idle')
   const config = await call('config.get')
   check('config.get reports tokenConfigured', config.ok === true && config.value.tokenConfigured === true)
+  check('config.get exposes the access token masked (head+tail only)',
+    config.value.accessTokenMasked === 'pat-****cess'
+      && config.value.accessTokenMasked !== storedCredential
+      && !config.value.accessTokenMasked.includes(storedCredential.slice(4, -4)))
+
+  // 4a. Post-login reads (usage snapshot) authenticate with the cached access
+  //     token: no cookie construction, no /api/user/auth/refresh exchange.
+  const refreshBefore = refreshExchanges
+  const snapshot = await call('snapshot.get', { force: true })
+  check('snapshot ok over the access token', snapshot.ok === true && snapshot.value.user?.username === 'root')
+  check('usage reads spend zero refresh exchanges', refreshExchanges === refreshBefore)
+  check('reads carried the access token bearer', sawSelfOverAccessToken === true)
+
+  // 4b. Web-console regeneration replaces the account's only token; the
+  //     plugin must NOT fight back — automatic re-mints from several
+  //     logged-in clients rotate the token endlessly and 429 the server.
+  //     The next snapshot signs out: credential cleared, chat key kept.
+  accessTokens.delete(storedCredential)
+  currentAccessToken = 'pat-web.regenerated'
+  accessTokens.add(currentAccessToken)
+  const dead = await call('snapshot.get', { force: true })
+  check('dead token surfaces a sign-out error, not a retry storm', dead.ok === false
+    && dead.error.message.includes('signed out'))
+  check('sign-out cleared the console credential', credentialsStore.has('NEWAPI_SESSION') === false)
+  check('sign-out kept the chat api key (independent of the token)', credentialsStore.get('NEWAPI_API_KEY') === 'sk-full-key')
+  check('authKind reset by the sign-out', settingsStore.authKind === '')
+
+  // 4c. The user signs in again: one deliberate login, the server's CURRENT
+  //     token (ensure semantics) lands in the store, snapshot works again.
+  const relogin = await call('login.native.start', { baseUrl: base })
+  check('re-login window opened', relogin.ok === true && electron.windows.length === 2)
+  await sleep(5000)
+  const relogged = await status()
+  check('re-login captures and stores the fresh token', relogged.status === 'ok'
+    && credentialsStore.get('NEWAPI_SESSION') === 'pat-web.regenerated')
+  await call('login.native.cancel')
+  const revived = await call('snapshot.get', { force: true })
+  check('snapshot works again over the fresh token', revived.ok === true && revived.value.user?.username === 'root')
 
   // 4b. Signing out hides the models: config.clear also removes the key-less
   //     route from the llm-pi-ai catalog so the chat selector stops offering it.
@@ -209,8 +281,8 @@ try {
 
   // 5. Second flow: user closing the login window surfaces a cancel error.
   await call('login.native.start', { baseUrl: base })
-  check('second window opened', electron.windows.length === 2)
-  const win2 = electron.windows[1]
+  check('second window opened', electron.windows.length === 3)
+  const win2 = electron.windows[2]
   win2.close()
   const closedStatus = await status()
   check('window close settles as observable error', closedStatus.status === 'error' && closedStatus.error === 'canceled')
@@ -219,10 +291,11 @@ try {
 
   // 6. Dispose: no throw, pending window force-closed.
   await call('login.native.start', { baseUrl: base })
-  const win3 = electron.windows[2]
+  const win3 = electron.windows[3]
   for (const dispose of disposers) dispose()
   check('dispose closes the pending window', win3.destroyed === true)
-  check('no host warnings', warns.length === 0)
+  // The 401 sign-out is EXPECTED to warn once; nothing else may warn.
+  check('only the expected sign-out warning', warns.length === 1 && warns[0].includes('signed out'))
 } finally {
   await new Promise((resolve) => server.close(resolve))
 }
