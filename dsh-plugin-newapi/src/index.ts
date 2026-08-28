@@ -44,8 +44,17 @@ export interface PluginConfig {
   passwordLogin?: boolean
 }
 
-/** Default context window (tokens) applied to every model without explicit limits. */
-const DEFAULT_CONTEXT_WINDOW = 180_000
+/**
+ * Default context window (tokens) applied to every model without explicit
+ * limits. Deliberately conservative: auto-compaction fires at 80% of this
+ * figure, and gateways that cannot describe a model's real limit (the reason
+ * this default exists) are exactly where models silently degrade past ~130k
+ * tokens — corrupted tool names (`pwsh` → `psh2`/`powsh`), endless
+ * unknown-tool loops that even compaction cannot wash out of the context.
+ * 128k keeps the compaction point (~105k) below that degradation band; raise
+ * real limits per model via `models.setLimit` instead of this default.
+ */
+const DEFAULT_CONTEXT_WINDOW = 131_072
 const DEFAULT_ROUTE = 'newapi'
 const DEFAULT_API_KEY_ENV = 'NEWAPI_API_KEY'
 const SESSION_ENV = 'NEWAPI_SESSION'
@@ -998,7 +1007,7 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
       const models = (limit === undefined ? snapshot.models : snapshot.models.slice(0, limit)).map((model) => ({
         id: model.id,
         // Explicit per-model limits win; otherwise the default context window
-        // (180k out of the box) sizes requests for models the gateway can't
+        // (128k out of the box) sizes requests for models the gateway can't
         // describe. 0 disables the default.
         ...(limits[model.id] ?? (defaultContextWindow > 0 ? { contextWindow: defaultContextWindow } : {})),
       }))

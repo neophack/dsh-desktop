@@ -423,7 +423,7 @@ function usageFromUser(user, quotaPerUnit) {
 }
 
 // src/index.ts
-var DEFAULT_CONTEXT_WINDOW = 18e4;
+var DEFAULT_CONTEXT_WINDOW = 131072;
 var DEFAULT_ROUTE = "newapi";
 var DEFAULT_API_KEY_ENV = "NEWAPI_API_KEY";
 var SESSION_ENV = "NEWAPI_SESSION";
@@ -1114,7 +1114,7 @@ function apply(ctx, config = {}) {
       const models = (limit === void 0 ? snapshot.models : snapshot.models.slice(0, limit)).map((model) => ({
         id: model.id,
         // Explicit per-model limits win; otherwise the default context window
-        // (180k out of the box) sizes requests for models the gateway can't
+        // (128k out of the box) sizes requests for models the gateway can't
         // describe. 0 disables the default.
         ...limits[model.id] ?? (defaultContextWindow > 0 ? { contextWindow: defaultContextWindow } : {})
       }));

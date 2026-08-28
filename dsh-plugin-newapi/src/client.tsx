@@ -262,7 +262,7 @@ const zh: Record<string, string> = {
   currencyCny: '人民币 (¥)',
   currencyUsd: '美元 ($)',
   defaultContextWindowLabel: '默认上下文',
-  defaultContextWindowHint: '所有未单独设置的模型默认 180000 (180k) tokens; 填 0 关闭, 保存后需重新同步模型生效。',
+  defaultContextWindowHint: '所有未单独设置的模型默认 131072 (128k) tokens; 填 0 关闭, 保存后需重新同步模型生效。',
   saveSettings: '保存设置',
   settingsSaved: '设置已保存。',
   loadFailed: '加载配置失败, 请重试。',
@@ -359,7 +359,7 @@ const en: Record<string, string> = {
   currencyCny: 'CNY (¥)',
   currencyUsd: 'USD ($)',
   defaultContextWindowLabel: 'Default context',
-  defaultContextWindowHint: 'Every model without explicit limits defaults to 180000 (180k) tokens; 0 disables. Save, then re-sync models to apply.',
+  defaultContextWindowHint: 'Every model without explicit limits defaults to 131072 (128k) tokens; 0 disables. Save, then re-sync models to apply.',
   saveSettings: 'Save settings',
   settingsSaved: 'Settings saved.',
   loadFailed: 'Failed to load settings; please retry.',
@@ -1322,7 +1322,7 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
                   <span>{t('defaultContextWindowLabel')}</span>
                   <Input
                     value={defaultContextWindow}
-                    placeholder="180000"
+                    placeholder="131072"
                     onChange={(event: ChangeEvent<HTMLInputElement>) => setDefaultContextWindow(event.target.value)}
                     style={{ width: 110 }}
                     inputMode="numeric"
@@ -1568,12 +1568,12 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
                                     onClick={() => {
                                       setEditing({
                                         id: model.id,
-                                        contextWindow: String(config?.defaultContextWindow ?? 180000),
+                                        contextWindow: String(config?.defaultContextWindow ?? 131072),
                                         maxTokens: '',
                                       })
                                     }}
                                   >
-                                    {t('defaultLimitDisplay', { window: String(config?.defaultContextWindow ?? 180000) })}
+                                    {t('defaultLimitDisplay', { window: String(config?.defaultContextWindow ?? 131072) })}
                                   </span>
                                 )
                               : `${storedLimit.contextWindow !== undefined ? String(storedLimit.contextWindow) : '?'} / ${storedLimit.maxTokens !== undefined ? String(storedLimit.maxTokens) : '?'}`}
