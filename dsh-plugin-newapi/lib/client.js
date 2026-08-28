@@ -128,7 +128,7 @@ var zh = {
   currencyCny: "\u4EBA\u6C11\u5E01 (\xA5)",
   currencyUsd: "\u7F8E\u5143 ($)",
   defaultContextWindowLabel: "\u9ED8\u8BA4\u4E0A\u4E0B\u6587",
-  defaultContextWindowHint: "\u6240\u6709\u672A\u5355\u72EC\u8BBE\u7F6E\u7684\u6A21\u578B\u9ED8\u8BA4 180000 (180k) tokens; \u586B 0 \u5173\u95ED, \u4FDD\u5B58\u540E\u9700\u91CD\u65B0\u540C\u6B65\u6A21\u578B\u751F\u6548\u3002",
+  defaultContextWindowHint: "\u6240\u6709\u672A\u5355\u72EC\u8BBE\u7F6E\u7684\u6A21\u578B\u9ED8\u8BA4 131072 (128k) tokens; \u586B 0 \u5173\u95ED, \u4FDD\u5B58\u540E\u9700\u91CD\u65B0\u540C\u6B65\u6A21\u578B\u751F\u6548\u3002",
   saveSettings: "\u4FDD\u5B58\u8BBE\u7F6E",
   settingsSaved: "\u8BBE\u7F6E\u5DF2\u4FDD\u5B58\u3002",
   loadFailed: "\u52A0\u8F7D\u914D\u7F6E\u5931\u8D25, \u8BF7\u91CD\u8BD5\u3002",
@@ -225,7 +225,7 @@ var en = {
   currencyCny: "CNY (\xA5)",
   currencyUsd: "USD ($)",
   defaultContextWindowLabel: "Default context",
-  defaultContextWindowHint: "Every model without explicit limits defaults to 180000 (180k) tokens; 0 disables. Save, then re-sync models to apply.",
+  defaultContextWindowHint: "Every model without explicit limits defaults to 131072 (128k) tokens; 0 disables. Save, then re-sync models to apply.",
   saveSettings: "Save settings",
   settingsSaved: "Settings saved.",
   loadFailed: "Failed to load settings; please retry.",
@@ -1093,7 +1093,7 @@ function NewApiSettings(props) {
             import_dsh_client_ui_primitives.Input,
             {
               value: defaultContextWindow,
-              placeholder: "180000",
+              placeholder: "131072",
               onChange: (event) => setDefaultContextWindow(event.target.value),
               style: { width: 110 },
               inputMode: "numeric",
@@ -1296,11 +1296,11 @@ function NewApiSettings(props) {
                   onClick: () => {
                     setEditing({
                       id: model.id,
-                      contextWindow: String(config?.defaultContextWindow ?? 18e4),
+                      contextWindow: String(config?.defaultContextWindow ?? 131072),
                       maxTokens: ""
                     });
                   },
-                  children: t("defaultLimitDisplay", { window: String(config?.defaultContextWindow ?? 18e4) })
+                  children: t("defaultLimitDisplay", { window: String(config?.defaultContextWindow ?? 131072) })
                 }
               ) : `${storedLimit.contextWindow !== void 0 ? String(storedLimit.contextWindow) : "?"} / ${storedLimit.maxTokens !== void 0 ? String(storedLimit.maxTokens) : "?"}` }),
               /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { style: { padding: 4, whiteSpace: "nowrap" }, children: editingThis ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { style: { display: "inline-flex", gap: 6 }, children: [
