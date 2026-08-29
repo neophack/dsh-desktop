@@ -488,6 +488,17 @@ var inject = ["settings", "credentials", "connection"];
 function ok(value) {
   return { ok: true, value };
 }
+function detach(promise, onSettled, onError) {
+  void promise.then(
+    () => {
+      onSettled?.();
+    },
+    (error) => {
+      onSettled?.();
+      onError?.(error);
+    }
+  );
+}
 var RPC_WIRE_CODES = /* @__PURE__ */ new Set(["bad-request", "cancelled", "internal"]);
 function fail(code, message) {
   const wireCode = code === "invalid-argument" ? "bad-request" : RPC_WIRE_CODES.has(code) ? code : "internal";
@@ -552,7 +563,13 @@ function apply(ctx, config = {}) {
     return typeof saved === "number" && saved >= 0 ? Math.floor(saved) : DEFAULT_CONTEXT_WINDOW;
   };
   const currentCredential = async () => {
-    const hit = await ctx.credentials.resolve(sessionRef);
+    let hit;
+    try {
+      hit = await ctx.credentials.resolve(sessionRef);
+    } catch (error) {
+      logger.warn(`newapi: reading the stored credential failed: ${describeError(error)}`);
+      return void 0;
+    }
     if (typeof hit?.value !== "string" || hit.value.length === 0) return void 0;
     const kind = stored().authKind;
     if (kind === "token") return { kind: "token", value: hit.value };
@@ -571,7 +588,7 @@ function apply(ctx, config = {}) {
       onSessionRotated: (value) => {
         const kind = stored().authKind;
         if (kind === "token" || kind === "") return;
-        void ctx.credentials.set(sessionRef, value).catch((error) => {
+        detach(ctx.credentials.set(sessionRef, value), void 0, (error) => {
           logger.warn(`newapi: persisting rotated session failed: ${describeError(error)}`);
         });
       }
@@ -649,7 +666,11 @@ function apply(ctx, config = {}) {
     } catch (error) {
       logger.warn(`newapi: auto model sync failed: ${describeError(error)}`);
     }
+    return kind;
   }
+  const watchTickFailed = (error) => {
+    logger.warn(`newapi: embedded login watch tick failed: ${describeError(error)}`);
+  };
   async function pollNativeCookie(attempt, jar) {
     if (attempt.busy || attempt.status !== "pending") return;
     let cookies;
@@ -690,8 +711,12 @@ function apply(ctx, config = {}) {
     }
   }
   async function signOutDeadCredential() {
-    await ctx.credentials.unset(sessionRef);
-    await scope.update({ authKind: "" });
+    try {
+      await ctx.credentials.unset(sessionRef);
+      await scope.update({ authKind: "" });
+    } catch (error) {
+      logger.warn(`newapi: clearing the dead credential failed: ${describeError(error)}`);
+    }
     snapshotClient = void 0;
     snapshotClientKey = "";
     invalidateSnapshot();
@@ -728,7 +753,7 @@ function apply(ctx, config = {}) {
     }
     const electron = await loadElectron();
     const jar = electron?.session?.defaultSession?.cookies;
-    if (electron === void 0 || jar === void 0) {
+    if (electron === null || jar === void 0) {
       return fail("capability-unavailable", "embedded sign-in needs the DSH Desktop app (Electron session access)");
     }
     const loginUrl = await resolveLoginUrl(baseUrl, info);
@@ -742,7 +767,7 @@ function apply(ctx, config = {}) {
         }
       }, LOGIN_TIMEOUT_MS),
       ticker: setInterval(() => {
-        void pollNativeCookie(attempt, jar);
+        detach(pollNativeCookie(attempt, jar), void 0, watchTickFailed);
       }, LOGIN_POLL_MS),
       status: "pending",
       lastVerified: "",
@@ -752,7 +777,7 @@ function apply(ctx, config = {}) {
     };
     nativeLogin = attempt;
     openLoginWindow(attempt, electron, loginUrl);
-    void pollNativeCookie(attempt, jar);
+    detach(pollNativeCookie(attempt, jar), void 0, watchTickFailed);
     logger.info(`newapi: embedded login watching cookies for ${attempt.origin}`);
     return ok({ loginUrl });
   }
@@ -781,8 +806,13 @@ function apply(ctx, config = {}) {
       win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedUrl) => {
         logger.warn(`newapi: login window failed to load ${validatedUrl}: ${errorDescription} (${errorCode})`);
       });
-      win.webContents.on("console-message", (_event, level, message, line, sourceId) => {
-        logger.info(`newapi: login window console[${level}] ${sourceId}:${line}: ${message}`);
+      win.webContents.on("console-message", (...args) => {
+        const details = args[0] ?? {};
+        const level = details.level ?? args[1];
+        const message = details.message ?? args[2];
+        const line = details.lineNumber ?? args[3];
+        const sourceId = details.sourceId ?? args[4];
+        logger.debug(`newapi: login window console[${String(level ?? "?")}] ${String(sourceId ?? "?")}:${String(line ?? "?")}: ${String(message ?? "")}`);
       });
       win.on("closed", () => {
         attempt.window = void 0;
@@ -842,7 +872,7 @@ function apply(ctx, config = {}) {
     } catch {
     }
   }
-  void loadPersistedSnapshots();
+  detach(loadPersistedSnapshots());
   function snapshotClientFor(baseUrl, credential) {
     const key = `${baseUrl}\0${credential.kind}\0${credential.value}`;
     if (snapshotClient === void 0 || key !== snapshotClientKey) {
@@ -855,7 +885,7 @@ function apply(ctx, config = {}) {
   function invalidateSnapshot() {
     snapshotCache = void 0;
     rateLimitedUntil = 0;
-    void dropPersistedSnapshots();
+    detach(dropPersistedSnapshots());
   }
   function staleSnapshot() {
     if (snapshotCache === void 0) return void 0;
@@ -863,42 +893,54 @@ function apply(ctx, config = {}) {
   }
   function refreshSnapshot(signal) {
     const flight = (async () => {
-      const baseUrl = currentBaseUrl();
-      if (baseUrl === "") return fail("not-configured", "no NewAPI base URL configured");
-      const cooldown = Math.max(rateLimitedUntil - Date.now(), sharedCooldownRemaining());
-      if (cooldown > 0) return fail("rate-limited", `newapi: rate-limit cooldown active (${String(Math.ceil(cooldown / 1e3))}s left)`);
-      const credential = await currentCredential();
-      if (credential === void 0) return fail("not-configured", "no NewAPI credential configured");
-      const client = snapshotClientFor(baseUrl, credential);
       try {
-        const server = await client.getServerInfo(signal);
-        const user = redactUser(await client.getUser(signal));
-        const [tokens, models, pricing] = await Promise.all([
-          client.getTokens(signal).catch(() => []),
-          client.getModels(signal),
-          client.getPricing(signal).catch(() => /* @__PURE__ */ new Map())
-        ]);
-        return ok({
-          baseUrl,
-          server,
-          user: redactUser(user),
-          tokens: redactTokens(tokens),
-          models: mergeModels(models, pricing),
-          usage: usageFromUser(user, server.quotaPerUnit)
-        });
+        const result = await runSnapshotFetch(signal);
+        if (result.ok) {
+          snapshotCache = { payload: result.value, at: Date.now() };
+          detach(persistSnapshot(result.value.baseUrl, result.value));
+        }
+        return result;
       } catch (error) {
-        if (error instanceof NewApiError && error.status === 429) {
-          rateLimitedUntil = Date.now() + Math.max(RATE_LIMIT_COOLDOWN_MS, sharedCooldownRemaining());
-          return fail("rate-limited", "newapi: server rate limit (429) hit; wait a moment before retrying");
-        }
-        if (error instanceof NewApiError && error.status === 401) {
-          await signOutDeadCredential();
-          return fail("token-expired", "the access token was replaced on the server (another sign-in or a web regeneration); signed out \u2014 please sign in again");
-        }
         return fail("fetch-failed", describeError(error));
       }
     })();
     return flight;
+  }
+  async function runSnapshotFetch(signal) {
+    const baseUrl = currentBaseUrl();
+    if (baseUrl === "") return fail("not-configured", "no NewAPI base URL configured");
+    const cooldown = Math.max(rateLimitedUntil - Date.now(), sharedCooldownRemaining());
+    if (cooldown > 0) return fail("rate-limited", `newapi: rate-limit cooldown active (${String(Math.ceil(cooldown / 1e3))}s left)`);
+    const credential = await currentCredential();
+    if (credential === void 0) return fail("not-configured", "no NewAPI credential configured");
+    const client = snapshotClientFor(baseUrl, credential);
+    try {
+      const server = await client.getServerInfo(signal);
+      const user = redactUser(await client.getUser(signal));
+      const [tokens, models, pricing] = await Promise.all([
+        client.getTokens(signal).catch(() => []),
+        client.getModels(signal),
+        client.getPricing(signal).catch(() => /* @__PURE__ */ new Map())
+      ]);
+      return ok({
+        baseUrl,
+        server,
+        user: redactUser(user),
+        tokens: redactTokens(tokens),
+        models: mergeModels(models, pricing),
+        usage: usageFromUser(user, server.quotaPerUnit)
+      });
+    } catch (error) {
+      if (error instanceof NewApiError && error.status === 429) {
+        rateLimitedUntil = Date.now() + Math.max(RATE_LIMIT_COOLDOWN_MS, sharedCooldownRemaining());
+        return fail("rate-limited", "newapi: server rate limit (429) hit; wait a moment before retrying");
+      }
+      if (error instanceof NewApiError && error.status === 401) {
+        await signOutDeadCredential();
+        return fail("token-expired", "the access token was replaced on the server (another sign-in or a web regeneration); signed out \u2014 please sign in again");
+      }
+      return fail("fetch-failed", describeError(error));
+    }
   }
   async function fetchSnapshot(signal, force = false) {
     const now = Date.now();
@@ -915,7 +957,7 @@ function apply(ctx, config = {}) {
       if (snapshotCache !== void 0) {
         const background = refreshSnapshot(void 0);
         snapshotInFlight = background;
-        void background.finally(() => {
+        detach(background, () => {
           snapshotInFlight = void 0;
         });
         return staleSnapshot();
@@ -924,16 +966,12 @@ function apply(ctx, config = {}) {
     const flight = refreshSnapshot(signal);
     if (!force) {
       snapshotInFlight = flight;
-      void flight.finally(() => {
+      detach(flight, () => {
         snapshotInFlight = void 0;
       });
     }
     const result = await flight;
-    if (result.ok) {
-      snapshotCache = { payload: result.value, at: Date.now() };
-      void persistSnapshot(result.value.baseUrl, result.value);
-      return result;
-    }
+    if (result.ok) return result;
     const stale = staleSnapshot();
     if (stale !== void 0) {
       if (snapshotCache !== void 0) snapshotCache.at = 0;
@@ -942,10 +980,11 @@ function apply(ctx, config = {}) {
     return result;
   }
   async function fetchUser(signal) {
-    const cached = snapshotCache;
-    if (cached !== void 0 && Date.now() - cached.at < SNAPSHOT_TTL_MS) return ok(cached.payload.user);
+    const cachedUser = snapshotCache?.payload.user;
+    const cachedAt = snapshotCache?.at ?? 0;
+    if (cachedUser !== void 0 && Date.now() - cachedAt < SNAPSHOT_TTL_MS) return ok(cachedUser);
     if (Date.now() < rateLimitedUntil || sharedCooldownRemaining() > 0) {
-      if (cached !== void 0) return ok(cached.payload.user);
+      if (cachedUser !== void 0) return ok(cachedUser);
       return fail("rate-limited", "newapi: rate-limited by the server; retry shortly");
     }
     const baseUrl = currentBaseUrl();
@@ -956,7 +995,7 @@ function apply(ctx, config = {}) {
       return ok(redactUser(await snapshotClientFor(baseUrl, credential).getUser(signal)));
     } catch (error) {
       if (error instanceof NewApiError && error.status === 429) rateLimitedUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
-      if (cached !== void 0) return ok(cached.payload.user);
+      if (cachedUser !== void 0) return ok(cachedUser);
       return fail("fetch-failed", describeError(error));
     }
   }
@@ -986,7 +1025,7 @@ function apply(ctx, config = {}) {
   const endpoints = {
     /** Stored config + credential status; never the secret value. */
     "config.get": async () => {
-      void ensureApiKeyStored();
+      detach(ensureApiKeyStored());
       const credential = await currentCredential();
       let sessionConfigured = false;
       try {
@@ -1274,7 +1313,7 @@ function apply(ctx, config = {}) {
       logger.warn(`newapi: ${endpoint} failed: ${describeError(error)}`);
       return fail("internal", describeError(error));
     }
-  }, { authority: "loopback" });
+  }, { authority: "trusted-host" });
   async function removeRouteFromCatalog(reason) {
     try {
       const section = ctx.settings.get(LLM_PI_AI_NS);
@@ -1325,14 +1364,14 @@ function apply(ctx, config = {}) {
       }
     })();
     reconcileInFlight = flight;
-    void flight.finally(() => {
+    detach(flight, () => {
       reconcileInFlight = void 0;
     });
     return flight;
   }
   ctx.on("credentials/reference-updated", (changed) => {
     if (changed !== ref && String(changed) !== apiKeyEnv) return;
-    void reconcileCatalogVisibility("api key credential changed");
+    detach(reconcileCatalogVisibility("api key credential changed"));
   });
   async function ensureAccessTokenStored() {
     try {
@@ -1374,8 +1413,9 @@ function apply(ctx, config = {}) {
       const section = ctx.settings.get(LLM_PI_AI_NS);
       const routeProfile = section?.providers?.[route];
       if (routeProfile === void 0 || !Array.isArray(routeProfile.models) || routeProfile.models.length === 0) return;
+      const storedModels = routeProfile.models;
       const limits = readModelLimits(stored().modelLimits);
-      const healed = routeProfile.models.map((model) => {
+      const healed = storedModels.map((model) => {
         if (typeof model !== "object" || model === null) return model;
         const entry = model;
         if (typeof entry.id !== "string") return model;
@@ -1388,7 +1428,7 @@ function apply(ctx, config = {}) {
         }
         return next === entry ? model : next;
       });
-      if (healed.every((model, index) => model === routeProfile.models?.[index])) return;
+      if (healed.every((model, index) => model === storedModels[index])) return;
       await ctx.settings.update(LLM_PI_AI_NS, {
         providers: { [route]: { ...routeProfile, models: healed } }
       });
@@ -1397,12 +1437,14 @@ function apply(ctx, config = {}) {
       logger.warn(`newapi: healing stored model limits failed: ${describeError(error)}`);
     }
   }
-  void (async () => {
+  detach((async () => {
     await ensureAccessTokenStored();
     await ensureApiKeyStored();
     await reconcileCatalogVisibility("api key missing at startup");
     await healStoredRouteLimits();
-  })();
+  })(), void 0, (error) => {
+    logger.warn(`newapi: startup maintenance failed: ${describeError(error)}`);
+  });
   logger.info(`newapi: ready (route=${route}, apiKeyEnv=${apiKeyEnv})`);
 }
 function readBaseUrl(payload) {

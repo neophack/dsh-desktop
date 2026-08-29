@@ -88,9 +88,231 @@ function injectFooterRowStyle() {
     tag.remove();
   };
 }
+var SETTINGS_STYLE_TAG = "dsh-plugin-newapi/settings-styles";
+var SETTINGS_CSS = `
+.dshNewApiSettings {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  width: min(100%, 880px);
+  padding: 2px 0 36px;
+  color: var(--dsw-alias-label-primary);
+}
+.dshNewApiSettingsHeader h2,
+.dshNewApiSettingsGroup h3 { margin: 0; font-weight: 600; }
+.dshNewApiSettingsHeader h2 { font-size: 22px; line-height: 1.35; letter-spacing: -0.015em; }
+.dshNewApiSettingsGroup h3 { font-size: 15px; line-height: 1.4; letter-spacing: -0.01em; }
+.dshNewApiSettingsHeader p,
+.dshNewApiSettingsIntro,
+.dshNewApiSettingsHint {
+  margin: 6px 0 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.dshNewApiSettingsGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-top: 28px;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+.dshNewApiSettingsForm {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.dshNewApiSettingsField {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+}
+.dshNewApiSettingsFieldNarrow { flex: 0 0 auto; }
+.dshNewApiSettingsInput {
+  width: 100%;
+  min-height: 36px;
+  box-sizing: border-box;
+  padding: 7px 11px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  outline: none;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 13px;
+}
+.dshNewApiSettingsInput:focus-visible {
+  border-color: var(--dsw-alias-brand-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-brand-primary) 20%, transparent);
+}
+.dshNewApiSettingsActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.dshNewApiSettingsButton {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 5px 13px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.dshNewApiSettingsButton:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
+.dshNewApiSettingsButton:disabled { cursor: default; opacity: .55; }
+.dshNewApiSettingsButtonSecondary { color: var(--dsw-alias-label-secondary); }
+.dshNewApiSettingsNotice,
+.dshNewApiSettingsError,
+.dshNewApiSettingsSuccess {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.dshNewApiSettingsNotice { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary); }
+.dshNewApiSettingsError { color: var(--dsw-alias-state-error-primary); background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent); }
+.dshNewApiSettingsSuccess { color: var(--dsw-alias-state-success-primary); background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 10%, transparent); }
+.dshNewApiSettingsToggleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  padding: 13px 14px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-1);
+  font-size: 13px;
+}
+.dshNewApiSettingsToggle {
+  flex: 0 0 auto;
+  position: relative;
+  width: 40px;
+  height: 22px;
+  padding: 2px;
+  border: none;
+  border-radius: 999px;
+  background: var(--dsw-alias-border-l2);
+  cursor: pointer;
+  transition: background-color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+.dshNewApiSettingsToggle[aria-checked="true"] { background: var(--dsw-alias-brand-primary); }
+.dshNewApiSettingsToggle:disabled { cursor: default; opacity: .5; }
+.dshNewApiSettingsToggle:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: 2px;
+}
+.dshNewApiSettingsToggleKnob {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--dsw-alias-label-primary-foreground);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .24);
+  transform: translateX(0);
+  transition: transform var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+.dshNewApiSettingsToggle[aria-checked="true"] .dshNewApiSettingsToggleKnob { transform: translateX(18px); }
+.dshNewApiSettingsDl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 20px;
+  font-size: 13px;
+}
+.dshNewApiSettingsDl dt { color: var(--dsw-alias-label-secondary); }
+.dshNewApiSettingsDl dd { margin: 0; font-variant-numeric: tabular-nums; }
+.dshNewApiUsage {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.dshNewApiUsageTrack {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--dsw-alias-bg-layer-2);
+}
+.dshNewApiUsageFill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--dsw-alias-brand-primary, var(--dsw-alias-button-primary-fill));
+  transition: width 320ms cubic-bezier(0.22, 1, 0.36, 1), background-color 320ms ease;
+}
+.dshNewApiUsageFill[data-warn="true"] { background: var(--dsw-alias-state-warn-primary, #e6a700); }
+.dshNewApiUsagePercent {
+  flex: 0 0 auto;
+  min-width: 42px;
+  text-align: right;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.dshNewApiSettingsTableWrap { overflow-x: auto; }
+.dshNewApiSettingsTable { border-collapse: collapse; font-size: 13px; }
+.dshNewApiSettingsTable th,
+.dshNewApiSettingsTable td { padding: 8px 16px 8px 0; text-align: left; }
+.dshNewApiSettingsTable td { font-variant-numeric: tabular-nums; }
+.dshNewApiSettingsTable th {
+  padding-top: 0;
+  padding-bottom: 10px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+.dshNewApiSettingsTable tbody tr + tr td { border-top: 1px solid var(--dsw-alias-border-l1); }
+.dshNewApiSettingsTable tbody tr:hover td { background: var(--dsw-alias-interactive-bg-hover, transparent); }
+.dshNewApiSettingsStatus { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.dshNewApiSettingsKeyOnce {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-secondary);
+}
+.dshNewApiSettingsKeyOnce code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; color: var(--dsw-alias-label-primary); }
+@media (max-width: 720px) {
+  .dshNewApiSettingsForm { align-items: stretch; flex-direction: column; }
+  .dshNewApiSettingsToggleRow { align-items: flex-start; }
+}
+`;
+function injectSettingsStyle() {
+  if (typeof document === "undefined") return () => {
+  };
+  const existing = document.querySelector(`style[data-plugin-css="${SETTINGS_STYLE_TAG}"]`);
+  if (existing !== null) return () => {
+  };
+  const tag = document.createElement("style");
+  tag.dataset.pluginCss = SETTINGS_STYLE_TAG;
+  tag.textContent = SETTINGS_CSS;
+  document.head.appendChild(tag);
+  return () => {
+    tag.remove();
+  };
+}
 function apply(ctx) {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), "newapi: copy dictionaries");
   ctx.effect(injectFooterRowStyle, "newapi: sidebar footer row layout");
+  ctx.effect(injectSettingsStyle, "newapi: settings page styles");
   const connection = ctx.get("connection");
   const call = async (endpoint, payload = {}, signal) => {
     try {
@@ -337,7 +559,7 @@ function UsageBar(props) {
   const known = used !== void 0 && total !== void 0 && total > 0;
   const ratio = known ? Math.min(1, Math.max(0, used / total)) : 0;
   const warn = known && ratio >= 0.8;
-  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: 10 }, children: [
+  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshNewApiUsage", children: [
     /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
       "div",
       {
@@ -345,28 +567,18 @@ function UsageBar(props) {
         "aria-valuemin": 0,
         "aria-valuemax": known ? 100 : void 0,
         "aria-valuenow": known ? Math.round(ratio * 100) : void 0,
-        style: {
-          flex: 1,
-          height: 6,
-          borderRadius: 3,
-          overflow: "hidden",
-          background: "var(--dsw-alias-bg-layer-2, rgba(128,128,128,0.18))"
-        },
-        children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { style: {
-          width: known ? `${Math.round(ratio * 100)}%` : 0,
-          height: "100%",
-          borderRadius: 3,
-          transition: "width 240ms ease",
-          background: warn ? "var(--dsw-alias-state-warn-primary, #e6a700)" : "var(--dsw-alias-brand-primary, var(--dsw-alias-button-primary-fill, #4a6cf7))"
-        } })
+        className: "dshNewApiUsageTrack",
+        children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+          "div",
+          {
+            className: "dshNewApiUsageFill",
+            "data-warn": warn ? "true" : void 0,
+            style: { width: known ? `${Math.round(ratio * 100)}%` : 0 }
+          }
+        )
       }
     ),
-    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { style: {
-      fontSize: 12,
-      fontVariantNumeric: "tabular-nums",
-      whiteSpace: "nowrap",
-      color: "var(--dsw-alias-label-secondary, inherit)"
-    }, children: known ? `${Math.round(ratio * 100)}%` : "--" })
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshNewApiUsagePercent", children: known ? `${Math.round(ratio * 100)}%` : "--" })
   ] });
 }
 function NewApiFooterButton(props) {
@@ -463,7 +675,7 @@ function NewApiFooterButton(props) {
       }
     ),
     /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Modal, { open, onClose: close, title: t("nav"), closeLabel: t("close"), children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { style: { maxHeight: "70vh", overflowY: "auto" }, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(NewApiPopup, { call, t, autoLogin: true, onAuthenticated: close }) }) }),
-    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Modal, { open: initOpen, onClose: closeInit, title: t("initTitle"), closeLabel: t("close"), children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { maxHeight: "70vh", overflowY: "auto" }, children: [
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Modal, { open: initOpen && !open, onClose: closeInit, title: t("initTitle"), closeLabel: t("close"), children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { maxHeight: "70vh", overflowY: "auto" }, children: [
       /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { margin: "0 0 10px", fontSize: 13, lineHeight: "20px", color: "var(--dsw-alias-label-secondary, inherit)" }, children: t("initHint") }),
       /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(NewApiPopup, { call, t, autoLogin: true, onAuthenticated: closeInit })
     ] }) })
@@ -488,6 +700,11 @@ function useNewApiSession(call, t, options = {}) {
   const [error, setError] = (0, import_react.useState)(void 0);
   const [snapshot, setSnapshot] = (0, import_react.useState)(void 0);
   const [syncing, setSyncing] = (0, import_react.useState)(false);
+  const mountedRef = (0, import_react.useRef)(true);
+  (0, import_react.useEffect)(() => () => {
+    mountedRef.current = false;
+  }, []);
+  const startingRef = (0, import_react.useRef)(false);
   const loadConfig = async () => {
     const result = await call("config.get");
     if (result.ok) {
@@ -527,16 +744,28 @@ function useNewApiSession(call, t, options = {}) {
     if (result.ok) setServer(result.value.info);
   };
   const startEmbeddedLogin = async (url) => {
+    if (startingRef.current) return;
+    startingRef.current = true;
     setBusy(true);
     setError(void 0);
     setMessage(void 0);
-    const result = await call("login.native.start", { baseUrl: url });
+    let result;
+    try {
+      result = await call("login.native.start", { baseUrl: url });
+    } finally {
+      startingRef.current = false;
+    }
+    if (!mountedRef.current) {
+      if (result.ok) void call("login.native.cancel");
+      return;
+    }
     setBusy(false);
     if (!result.ok) {
       setError(result.error.message);
       return;
     }
     setEmbedded(result.value);
+    embeddedRef.current = result.value;
   };
   (0, import_react.useEffect)(() => {
     void (async () => {
@@ -544,7 +773,7 @@ function useNewApiSession(call, t, options = {}) {
       setConfigLoaded(true);
       if (loaded !== void 0 && loaded.baseUrl !== "") await probeOnce(loaded.baseUrl);
       await loadSnapshot();
-      if (autoLogin === true && loaded !== void 0 && !loaded.tokenConfigured && loaded.baseUrl !== "") {
+      if (mountedRef.current && autoLogin === true && loaded !== void 0 && !loaded.tokenConfigured && loaded.baseUrl !== "") {
         await startEmbeddedLogin(loaded.baseUrl);
       }
     })();
@@ -728,6 +957,28 @@ function StatusStrip(props) {
       error
     ] }),
     message !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { style: { color: "var(--dsw-alias-state-success-primary, #3a3)" }, children: message })
+  ] });
+}
+function SettingsToggleRow(props) {
+  const { label, checked, disabled, onChange } = props;
+  const labelId = (0, import_react.useId)();
+  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshNewApiSettingsToggleRow", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { id: labelId, children: label }),
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+      "button",
+      {
+        type: "button",
+        role: "switch",
+        className: "dshNewApiSettingsToggle",
+        "aria-checked": checked,
+        "aria-labelledby": labelId,
+        disabled,
+        onClick: () => {
+          onChange(!checked);
+        },
+        children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshNewApiSettingsToggleKnob", "aria-hidden": "true" })
+      }
+    )
   ] });
 }
 function NewApiPopup(props) {
@@ -1044,244 +1295,321 @@ function NewApiSettings(props) {
   const feishuName = oauthProviders.find((provider) => provider.slug === "feishu")?.name ?? (oauthProviders[0] !== void 0 ? oauthProviders[0].name : "");
   const providerLabel = feishuName !== "" ? feishuName : "NewAPI";
   if (props.call === void 0 || props.t === void 0) return null;
-  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", flexDirection: "column", gap: 16, maxWidth: 720 }, children: [
-    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { margin: 0, fontSize: 13, lineHeight: "20px", color: "var(--dsw-alias-label-secondary, inherit)" }, children: t("intro") }),
-    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(StatusStrip, { error, message, t }),
-    config === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { style: { ...cardStyle, alignItems: "center" }, children: [
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { style: { fontSize: 13, color: "var(--dsw-alias-label-secondary, inherit)" }, children: configLoaded ? t("loadFailed") : t("loading") }),
-      configLoaded && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Button, { size: "sm", disabled: busy, onClick: () => void loadConfig(), children: t("refresh") })
-    ] }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { style: cardStyle, children: [
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h4", { style: cardTitleStyle, children: t("baseUrl") }),
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-        import_dsh_client_ui_primitives.Input,
-        {
-          value: baseUrl,
-          placeholder: config.baseUrlDefault !== "" ? config.baseUrlDefault : t("baseUrlPlaceholder"),
-          onChange: (event) => setBaseUrl(event.target.value),
-          spellCheck: false,
-          autoComplete: "off"
-        }
-      ),
-      config.baseUrlDefault !== "" && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { margin: 0, fontSize: 12, lineHeight: "18px", color: "var(--dsw-alias-label-tertiary, inherit)" }, children: t("defaultServer", { url: config.baseUrlDefault }) }),
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Button, { size: "sm", disabled: busy || baseUrl.trim() === "", onClick: () => void onProbe(), children: busy ? t("probing") : t("probe") }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { style: { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-            "input",
-            {
-              type: "checkbox",
-              checked: passwordLoginOn,
-              onChange: (event) => setPasswordLoginOn(event.target.checked)
-            }
-          ),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: t("enablePasswordLogin") })
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { style: { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13 }, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: t("currencyLabel") }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
-            "select",
-            {
-              value: currency,
-              onChange: (event) => {
-                const next = event.target.value;
-                setCurrency(next === "usd" ? "usd" : "cny");
-              },
-              style: { fontFamily: "inherit", fontSize: 13 },
-              children: [
-                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: "cny", children: t("currencyCny") }),
-                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: "usd", children: t("currencyUsd") })
-              ]
-            }
-          )
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { style: { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13 }, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: t("defaultContextWindowLabel") }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-            import_dsh_client_ui_primitives.Input,
-            {
-              value: defaultContextWindow,
-              placeholder: "131072",
-              onChange: (event) => setDefaultContextWindow(event.target.value),
-              style: { width: 110 },
-              inputMode: "numeric",
-              spellCheck: false
-            }
-          )
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { style: { fontSize: 12, color: "var(--dsw-alias-label-tertiary, inherit)" }, children: t("defaultContextWindowHint") }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "primary", disabled: busy, onClick: () => void onSaveSettings(), children: t("saveSettings") })
-      ] }),
-      server !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { style: { display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap", fontSize: 13 }, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.StateDot, { state: "done" }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { children: [
-          server.systemName,
-          " ",
-          server.version !== "" ? `(${server.version})` : ""
-        ] }),
-        oauthProviders.map((provider) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Pill, { children: provider.name }, provider.slug))
-      ] })
+  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshNewApiSettings", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("header", { className: "dshNewApiSettingsHeader", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h2", { children: t("nav") }),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: t("intro") })
     ] }),
-    /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { style: cardStyle, children: [
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h4", { style: cardTitleStyle, children: t("login") }),
-      embedded !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", flexDirection: "column", gap: 8 }, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { margin: 0, fontSize: 13, lineHeight: "20px", color: "var(--dsw-alias-label-secondary, inherit)" }, children: t("embeddedWaiting", { provider: providerLabel }) }),
+    error !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { className: "dshNewApiSettingsError", role: "alert", children: [
+      t("failure"),
+      ": ",
+      error
+    ] }),
+    message !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dshNewApiSettingsSuccess", role: "status", children: message }),
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { className: "dshNewApiSettingsGroup", "aria-label": t("baseUrl"), children: [
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h3", { children: t("baseUrl") }),
+        config?.baseUrlDefault !== void 0 && config.baseUrlDefault !== "" && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dshNewApiSettingsIntro", children: t("defaultServer", { url: config.baseUrlDefault }) })
+      ] }),
+      config === void 0 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dshNewApiSettingsHint", children: configLoaded ? t("loadFailed") : t("loading") }),
+        configLoaded && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dshNewApiSettingsButton", disabled: busy, onClick: () => {
+          void loadConfig();
+        }, children: t("refresh") })
+      ] }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
         /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
-          "div",
+          "form",
           {
-            style: {
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 12,
-              padding: "32px 16px",
-              borderRadius: 10,
-              border: "1px dashed var(--dsw-alias-border-l2, rgba(128,128,128,0.35))",
-              background: "var(--dsw-alias-bg-layer-1, transparent)",
-              textAlign: "center"
+            className: "dshNewApiSettingsForm",
+            onSubmit: (event) => {
+              event.preventDefault();
+              void onSaveSettings();
             },
             children: [
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { style: { fontSize: 14 }, children: t("embeddedWindowHint", { provider: providerLabel }) }),
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Button, { size: "sm", disabled: busy, onClick: () => void startEmbeddedLogin(baseUrl), children: busy ? t("probing") : t("embeddedReopen") })
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { className: "dshNewApiSettingsField", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { "aria-hidden": "true", children: t("baseUrl") }),
+                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+                  "input",
+                  {
+                    className: "dshNewApiSettingsInput",
+                    value: baseUrl,
+                    placeholder: config.baseUrlDefault !== "" ? config.baseUrlDefault : t("baseUrlPlaceholder"),
+                    onChange: (event) => setBaseUrl(event.target.value),
+                    spellCheck: false,
+                    autoComplete: "off"
+                  }
+                )
+              ] }),
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "submit", className: "dshNewApiSettingsButton", disabled: busy, children: t("saveSettings") }),
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+                "button",
+                {
+                  type: "button",
+                  className: "dshNewApiSettingsButton dshNewApiSettingsButtonSecondary",
+                  disabled: busy || baseUrl.trim() === "",
+                  onClick: () => {
+                    void onProbe();
+                  },
+                  children: busy ? t("probing") : t("probe")
+                }
+              )
             ]
           }
         ),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: 13 }, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Button, { size: "sm", onClick: () => void onEmbeddedCancel(), children: t("embeddedCancel") }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { style: { color: "var(--dsw-alias-label-tertiary, inherit)" }, children: t("embeddedCaptureNote") })
-        ] })
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+          SettingsToggleRow,
+          {
+            label: t("enablePasswordLogin"),
+            checked: passwordLoginOn,
+            disabled: busy,
+            onChange: setPasswordLoginOn
+          }
+        ),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("form", { className: "dshNewApiSettingsForm", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { className: "dshNewApiSettingsField dshNewApiSettingsFieldNarrow", children: [
+            t("currencyLabel"),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
+              "select",
+              {
+                className: "dshNewApiSettingsInput",
+                value: currency,
+                onChange: (event) => {
+                  const next = event.target.value;
+                  setCurrency(next === "usd" ? "usd" : "cny");
+                },
+                children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: "cny", children: t("currencyCny") }),
+                  /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: "usd", children: t("currencyUsd") })
+                ]
+              }
+            )
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { className: "dshNewApiSettingsField dshNewApiSettingsFieldNarrow", children: [
+            t("defaultContextWindowLabel"),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+              "input",
+              {
+                className: "dshNewApiSettingsInput",
+                value: defaultContextWindow,
+                placeholder: "131072",
+                onChange: (event) => setDefaultContextWindow(event.target.value),
+                style: { width: 110 },
+                inputMode: "numeric",
+                spellCheck: false
+              }
+            )
+          ] })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dshNewApiSettingsHint", children: t("defaultContextWindowHint") }),
+        server !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dshNewApiSettingsNotice", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "dshNewApiSettingsStatus", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.StateDot, { state: "done" }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { children: [
+            server.systemName,
+            " ",
+            server.version !== "" ? `(${server.version})` : ""
+          ] }),
+          oauthProviders.map((provider) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Pill, { children: provider.name }, provider.slug))
+        ] }) })
+      ] })
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { className: "dshNewApiSettingsGroup", "aria-label": t("login"), children: [
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h3", { children: t("login") }) }),
+      embedded !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { className: "dshNewApiSettingsHint", children: [
+          t("embeddedWindowHint", { provider: providerLabel }),
+          " \u2014 ",
+          t("embeddedWaiting", { provider: providerLabel })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshNewApiSettingsActions", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dshNewApiSettingsButton", disabled: busy, onClick: () => {
+            void startEmbeddedLogin(baseUrl);
+          }, children: t("embeddedReopen") }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dshNewApiSettingsButton dshNewApiSettingsButtonSecondary", onClick: () => {
+            void onEmbeddedCancel();
+          }, children: t("embeddedCancel") })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dshNewApiSettingsNotice", children: t("embeddedCaptureNote") })
       ] }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Button, { variant: "primary", size: "sm", disabled: busy || baseUrl.trim() === "", onClick: () => void onEmbeddedLogin(), children: t("ssoButton", { provider: providerLabel }) }),
-          config !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Button, { size: "sm", disabled: busy, onClick: () => void onClear(), children: t("clear") }),
-          config !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { style: { display: "inline-flex", alignItems: "center", gap: 6 }, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshNewApiSettingsActions", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+            "button",
+            {
+              type: "button",
+              className: "dshNewApiSettingsButton",
+              disabled: busy || baseUrl.trim() === "",
+              onClick: () => {
+                void onEmbeddedLogin();
+              },
+              children: t("ssoButton", { provider: providerLabel })
+            }
+          ),
+          config !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dshNewApiSettingsButton dshNewApiSettingsButtonSecondary", disabled: busy, onClick: () => {
+            void onClear();
+          }, children: t("clear") }),
+          config !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "dshNewApiSettingsStatus", children: [
             /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.StateDot, { state: configured ? "done" : "warning" }),
             configured ? t("saved") : t("notConfigured")
           ] })
         ] }),
-        passwordLoginOn && server?.passwordLogin === true && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-            import_dsh_client_ui_primitives.Input,
-            {
-              value: username,
-              placeholder: t("username"),
-              onChange: (event) => setUsername(event.target.value),
-              autoComplete: "off",
-              spellCheck: false,
-              style: { width: 160 }
-            }
-          ),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-            import_dsh_client_ui_primitives.Input,
-            {
-              value: password,
-              type: "password",
-              placeholder: t("password"),
-              onChange: (event) => setPassword(event.target.value),
-              autoComplete: "off",
-              style: { width: 160 }
-            }
-          ),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Button, { size: "sm", disabled: busy || baseUrl.trim() === "" || username.trim() === "" || password === "", onClick: () => void onPasswordLogin(), children: busy ? t("loggingIn") : t("loginButton") })
-        ] })
+        passwordLoginOn && server?.passwordLogin === true && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
+          "form",
+          {
+            className: "dshNewApiSettingsForm",
+            onSubmit: (event) => {
+              event.preventDefault();
+              void onPasswordLogin();
+            },
+            children: [
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { className: "dshNewApiSettingsField dshNewApiSettingsFieldNarrow", children: [
+                t("username"),
+                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+                  "input",
+                  {
+                    className: "dshNewApiSettingsInput",
+                    value: username,
+                    onChange: (event) => setUsername(event.target.value),
+                    autoComplete: "off",
+                    spellCheck: false,
+                    style: { width: 160 }
+                  }
+                )
+              ] }),
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { className: "dshNewApiSettingsField dshNewApiSettingsFieldNarrow", children: [
+                t("password"),
+                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+                  "input",
+                  {
+                    className: "dshNewApiSettingsInput",
+                    type: "password",
+                    value: password,
+                    onChange: (event) => setPassword(event.target.value),
+                    autoComplete: "off",
+                    style: { width: 160 }
+                  }
+                )
+              ] }),
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+                "button",
+                {
+                  type: "submit",
+                  className: "dshNewApiSettingsButton",
+                  disabled: busy || baseUrl.trim() === "" || username.trim() === "" || password === "",
+                  children: busy ? t("loggingIn") : t("loginButton")
+                }
+              )
+            ]
+          }
+        )
       ] })
     ] }),
     snapshot !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
       /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(StaleNote, { snapshot, t }),
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { style: cardStyle, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: 8 }, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h4", { style: { ...cardTitleStyle, flex: 1 }, children: t("account") }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Button, { size: "sm", disabled: busy, onClick: () => void onRefresh(), children: t("refresh") })
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { className: "dshNewApiSettingsGroup", "aria-label": t("account"), children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h3", { children: t("account") }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dshNewApiSettingsActions", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dshNewApiSettingsButton dshNewApiSettingsButtonSecondary", disabled: busy, onClick: () => {
+          void onRefresh();
+        }, children: t("refresh") }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dshNewApiSettingsHint", style: { margin: 0 }, children: t("popupUsageTitle") }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(UsageBar, { used: snapshot.usage.quotaUsed, total: snapshot.usage.quotaTotal })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(UsageBar, { used: snapshot.usage.quotaUsed, total: snapshot.usage.quotaTotal }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("dl", { style: { margin: 0, display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 16px", fontSize: 13 }, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { style: { color: "var(--dsw-alias-label-secondary, inherit)" }, children: t("usernameLabel") }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("dd", { style: { margin: 0 }, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("dl", { className: "dshNewApiSettingsDl", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { children: t("usernameLabel") }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("dd", { children: [
             snapshot.user?.display_name ?? snapshot.user?.username ?? String(snapshot.user?.id ?? "--"),
             snapshot.user?.email !== void 0 && snapshot.user.email !== "" ? ` <${snapshot.user.email}>` : ""
           ] }),
           config?.accessTokenMasked !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { style: { color: "var(--dsw-alias-label-secondary, inherit)" }, children: t("accessTokenLabel") }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("dd", { style: { margin: 0 }, children: [
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { children: t("accessTokenLabel") }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("dd", { children: [
               /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("code", { style: { fontSize: 12 }, children: config.accessTokenMasked }),
               /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { style: { color: "var(--dsw-alias-label-tertiary, inherit)", fontSize: 12 }, children: t("accessTokenHint") })
             ] })
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { style: { color: "var(--dsw-alias-label-secondary, inherit)" }, children: t("group") }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dd", { style: { margin: 0 }, children: snapshot.user?.group ?? "--" }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { style: { color: "var(--dsw-alias-label-secondary, inherit)" }, children: t("requests") }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dd", { style: { margin: 0 }, children: snapshot.user?.request_count ?? "--" }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { style: { color: "var(--dsw-alias-label-secondary, inherit)" }, children: t("quotaUsed") }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dd", { style: { margin: 0 }, children: money(snapshot.usage.quotaUsed, currency, exchangeRate) }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { style: { color: "var(--dsw-alias-label-secondary, inherit)" }, children: t("quotaRemaining") }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dd", { style: { margin: 0 }, children: snapshot.usage.unlimited === true ? t("unlimited") : money(snapshot.usage.quotaRemaining, currency, exchangeRate) }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { style: { color: "var(--dsw-alias-label-secondary, inherit)" }, children: t("quotaTotal") }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dd", { style: { margin: 0 }, children: snapshot.usage.unlimited === true ? t("unlimited") : money(snapshot.usage.quotaTotal, currency, exchangeRate) })
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { children: t("group") }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dd", { children: snapshot.user?.group ?? "--" }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { children: t("requests") }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dd", { children: snapshot.user?.request_count ?? "--" }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { children: t("quotaUsed") }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dd", { children: money(snapshot.usage.quotaUsed, currency, exchangeRate) }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { children: t("quotaRemaining") }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dd", { children: snapshot.usage.unlimited === true ? t("unlimited") : money(snapshot.usage.quotaRemaining, currency, exchangeRate) }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { children: t("quotaTotal") }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dd", { children: snapshot.usage.unlimited === true ? t("unlimited") : money(snapshot.usage.quotaTotal, currency, exchangeRate) })
         ] })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { style: cardStyle, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: 8 }, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h4", { style: { ...cardTitleStyle, flex: 1 }, children: t("tokens") }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Button, { size: "sm", disabled: busy, onClick: () => void onCreateToken(), children: t("createToken") })
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { className: "dshNewApiSettingsGroup", "aria-label": t("tokens"), children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshNewApiSettingsActions", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h3", { style: { margin: 0, flex: 1 }, children: t("tokens") }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dshNewApiSettingsButton", disabled: busy, onClick: () => {
+            void onCreateToken();
+          }, children: t("createToken") })
         ] }),
-        createdKey !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8, padding: "6px 10px", border: "1px dashed var(--dsw-alias-label-tertiary, #888)", borderRadius: 8 }, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { style: { fontSize: 12, color: "var(--dsw-alias-label-secondary, inherit)" }, children: t("keyCreatedOnce", { name: createdKey.name }) }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("code", { style: { fontFamily: "monospace", fontSize: 13 }, children: createdKey.key }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Button, { size: "sm", onClick: () => void onCopyKey(createdKey.key), children: t("copyKey") })
+        createdKey !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshNewApiSettingsKeyOnce", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: t("keyCreatedOnce", { name: createdKey.name }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("code", { children: createdKey.key }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dshNewApiSettingsButton", onClick: () => {
+            void onCopyKey(createdKey.key);
+          }, children: t("copyKey") })
         ] }),
-        snapshot.tokens.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { margin: 0, fontSize: 13, color: "var(--dsw-alias-label-secondary, inherit)" }, children: t("noTokensHint") }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { style: { overflowX: "auto" }, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("table", { style: { borderCollapse: "collapse", fontSize: 13 }, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("tr", { style: { textAlign: "left", color: "var(--dsw-alias-label-tertiary, inherit)" }, children: [
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { style: { padding: "4px 12px 4px 0" }, children: t("tokenName") }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { style: { padding: 4 }, children: t("tokenKey") }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { style: { padding: 4 }, children: t("tokenQuota") }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { style: { padding: 4 }, children: t("tokenUsed") }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { style: { padding: 4 }, children: t("tokenExpires") }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { style: { padding: 4 }, children: t("tokenModels") })
+        snapshot.tokens.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dshNewApiSettingsHint", children: t("noTokensHint") }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dshNewApiSettingsTableWrap", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("table", { className: "dshNewApiSettingsTable", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("tr", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { children: t("tokenName") }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { children: t("tokenKey") }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { children: t("tokenQuota") }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { children: t("tokenUsed") }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { children: t("tokenExpires") }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { children: t("tokenModels") })
           ] }) }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("tbody", { children: snapshot.tokens.map((row) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("tr", { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { style: { padding: "4px 12px 4px 0" }, children: row.name ?? String(row.id) }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { style: { padding: 4 }, children: revealed[row.id] !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { style: { display: "inline-flex", gap: 6, alignItems: "center" }, children: [
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { children: row.name ?? String(row.id) }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { children: revealed[row.id] !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { style: { display: "inline-flex", gap: 6, alignItems: "center" }, children: [
               /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("code", { style: { fontFamily: "monospace" }, children: revealed[row.id] }),
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Button, { size: "sm", onClick: () => void onCopyKey(revealed[row.id]), children: t("copyKey") })
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dshNewApiSettingsButton", onClick: () => {
+                void onCopyKey(revealed[row.id]);
+              }, children: t("copyKey") })
             ] }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { style: { display: "inline-flex", gap: 6, alignItems: "center" }, children: [
               /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("code", { style: { fontFamily: "monospace", color: "var(--dsw-alias-label-secondary, inherit)" }, children: [
                 "\u2022\u2022\u2022\u2022",
                 row.key !== void 0 ? row.key.slice(-4) : "????"
               ] }),
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Button, { size: "sm", disabled: busy, onClick: () => void onRevealKey(row.id), children: t("revealKey") })
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dshNewApiSettingsButton", disabled: busy, onClick: () => {
+                void onRevealKey(row.id);
+              }, children: t("revealKey") })
             ] }) }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { style: { padding: 4 }, children: formatQuota(row.quota, snapshot.server.quotaPerUnit, currency, exchangeRate) }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { style: { padding: 4 }, children: formatQuota(row.used_quota, snapshot.server.quotaPerUnit, currency, exchangeRate) }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { style: { padding: 4 }, children: formatDate(row.expired_time) }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { style: { padding: 4 }, children: row.models === void 0 || row.models === "" || row.models === "-1" || row.models === "*" ? t("tokenAllModels") : row.models })
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { children: formatQuota(row.quota, snapshot.server.quotaPerUnit, currency, exchangeRate) }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { children: formatQuota(row.used_quota, snapshot.server.quotaPerUnit, currency, exchangeRate) }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { children: formatDate(row.expired_time) }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { children: row.models === void 0 || row.models === "" || row.models === "-1" || row.models === "*" ? t("tokenAllModels") : row.models })
           ] }, row.id)) })
         ] }) })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { style: cardStyle, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: 8 }, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h4", { style: { ...cardTitleStyle, flex: 1 }, children: t("models") }),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { className: "dshNewApiSettingsGroup", "aria-label": t("models"), children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshNewApiSettingsActions", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h3", { style: { margin: 0, flex: 1 }, children: t("models") }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Pill, { children: t("modelsCount", { count: models.length }) })
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { style: { overflowX: "auto" }, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("table", { style: { borderCollapse: "collapse", fontSize: 13 }, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("tr", { style: { textAlign: "left", color: "var(--dsw-alias-label-tertiary, inherit)" }, children: [
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { style: { padding: "4px 12px 4px 0" }, children: t("modelId") }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { style: { padding: 4 }, children: t("modelInput") }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { style: { padding: 4 }, children: t("modelOutput") }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { style: { padding: 4 }, children: t("modelLimits") }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { style: { padding: 4 }, children: t("modelImage") }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { style: { padding: 4 } })
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dshNewApiSettingsTableWrap", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("table", { className: "dshNewApiSettingsTable", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("tr", { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { children: t("modelId") }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { children: t("modelInput") }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { children: t("modelOutput") }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { children: t("modelLimits") }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { children: t("modelImage") }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", {})
           ] }) }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("tbody", { children: models.map((model) => {
             const storedLimit = limits[model.id];
             const editingThis = editing?.id === model.id;
             return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("tr", { children: [
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { style: { padding: "4px 12px 4px 0", fontFamily: "monospace" }, children: model.id }),
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { style: { padding: 4 }, children: model.priced === true ? formatPrice(model.inputPrice, currency, exchangeRate) : "--" }),
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { style: { padding: 4 }, children: model.priced === true ? formatPrice(model.outputPrice, currency, exchangeRate) : "--" }),
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { style: { padding: "4px 8px 4px 4px", whiteSpace: "nowrap" }, children: editingThis && editing !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { style: { display: "inline-flex", gap: 6, alignItems: "center" }, children: [
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { style: { fontFamily: "monospace" }, children: model.id }),
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { children: model.priced === true ? formatPrice(model.inputPrice, currency, exchangeRate) : "--" }),
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { children: model.priced === true ? formatPrice(model.outputPrice, currency, exchangeRate) : "--" }),
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { style: { whiteSpace: "nowrap" }, children: editingThis && editing !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { style: { display: "inline-flex", gap: 6, alignItems: "center" }, children: [
                 /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-                  import_dsh_client_ui_primitives.Input,
+                  "input",
                   {
+                    className: "dshNewApiSettingsInput",
                     value: editing.contextWindow,
                     placeholder: t("contextWindow"),
                     title: t("contextWindow"),
@@ -1293,8 +1621,9 @@ function NewApiSettings(props) {
                 ),
                 /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { style: { color: "var(--dsw-alias-label-tertiary, inherit)" }, children: "/" }),
                 /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-                  import_dsh_client_ui_primitives.Input,
+                  "input",
                   {
+                    className: "dshNewApiSettingsInput",
                     value: editing.maxTokens,
                     placeholder: t("maxOutputTokens"),
                     title: t("maxOutputTokens"),
@@ -1319,7 +1648,7 @@ function NewApiSettings(props) {
                   children: t("defaultLimitDisplay", { window: String(config?.defaultContextWindow ?? 131072) })
                 }
               ) : `${storedLimit.contextWindow !== void 0 ? String(storedLimit.contextWindow) : "?"} / ${storedLimit.maxTokens !== void 0 ? String(storedLimit.maxTokens) : "?"}` }),
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { style: { padding: 4, whiteSpace: "nowrap" }, children: editingThis && editing !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("label", { title: t("modelImage"), style: { display: "inline-flex", alignItems: "center", cursor: "pointer" }, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { style: { whiteSpace: "nowrap" }, children: editingThis && editing !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("label", { title: t("modelImage"), style: { display: "inline-flex", alignItems: "center", cursor: "pointer" }, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
                 "input",
                 {
                   type: "checkbox",
@@ -1334,33 +1663,53 @@ function NewApiSettings(props) {
                   children: storedLimit?.image === false ? "\u2014" : "\u2713"
                 }
               ) }),
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { style: { padding: 4, whiteSpace: "nowrap" }, children: editingThis ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { style: { display: "inline-flex", gap: 6 }, children: [
-                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Button, { size: "sm", variant: "primary", disabled: busy, onClick: () => void onSaveLimit(), children: t("saveLimit") }),
-                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Button, { size: "sm", disabled: busy, onClick: () => setEditing(void 0), children: t("cancelLimit") })
-              ] }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Button, { size: "sm", disabled: busy, onClick: () => {
-                setEditing({
-                  id: model.id,
-                  contextWindow: storedLimit?.contextWindow !== void 0 ? String(storedLimit.contextWindow) : "",
-                  maxTokens: storedLimit?.maxTokens !== void 0 ? String(storedLimit.maxTokens) : "",
-                  image: storedLimit?.image !== false
-                });
-              }, children: t("editLimit") }) })
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { style: { whiteSpace: "nowrap" }, children: editingThis ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { style: { display: "inline-flex", gap: 6 }, children: [
+                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dshNewApiSettingsButton", disabled: busy, onClick: () => {
+                  void onSaveLimit();
+                }, children: t("saveLimit") }),
+                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dshNewApiSettingsButton dshNewApiSettingsButtonSecondary", disabled: busy, onClick: () => {
+                  setEditing(void 0);
+                }, children: t("cancelLimit") })
+              ] }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+                "button",
+                {
+                  type: "button",
+                  className: "dshNewApiSettingsButton",
+                  disabled: busy,
+                  onClick: () => {
+                    setEditing({
+                      id: model.id,
+                      contextWindow: storedLimit?.contextWindow !== void 0 ? String(storedLimit.contextWindow) : "",
+                      maxTokens: storedLimit?.maxTokens !== void 0 ? String(storedLimit.maxTokens) : "",
+                      image: storedLimit?.image !== false
+                    });
+                  },
+                  children: t("editLimit")
+                }
+              ) })
             ] }, model.id);
           }) })
         ] }) }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", gap: 8, alignItems: "center" }, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Button, { variant: "primary", size: "sm", disabled: syncing || models.length === 0, onClick: () => void onSync(), children: syncing ? t("syncing") : t("sync") }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-            import_dsh_client_ui_primitives.Input,
-            {
-              value: syncLimit,
-              placeholder: t("syncLimit"),
-              onChange: (event) => setSyncLimit(event.target.value),
-              style: { width: 140 },
-              inputMode: "numeric"
-            }
-          )
-        ] })
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshNewApiSettingsForm", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dshNewApiSettingsButton", disabled: syncing || models.length === 0, onClick: () => {
+            void onSync();
+          }, children: syncing ? t("syncing") : t("sync") }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { className: "dshNewApiSettingsField dshNewApiSettingsFieldNarrow", children: [
+            t("syncLimit"),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+              "input",
+              {
+                className: "dshNewApiSettingsInput",
+                value: syncLimit,
+                placeholder: t("syncLimit"),
+                onChange: (event) => setSyncLimit(event.target.value),
+                style: { width: 140 },
+                inputMode: "numeric"
+              }
+            )
+          ] })
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dshNewApiSettingsHint", children: t("limitHint") })
       ] })
     ] })
   ] });

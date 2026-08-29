@@ -22,7 +22,7 @@
 
 插件与官方 DSH 插件一样由两面组成：
 
-- **Host 面**（`lib/index.js`）：Cordis 插件，持有 `newapi` settings namespace；访问令牌通过 credentials 服务保存（绝不写入 `settings.yaml` 或 `cordis.yml`）；调用 NewAPI 管理 API（`/api/user/self`、`/api/token/`、`/api/user/models`、`/api/pricing`）；对浏览器暴露回环限定的 `/newapi` RPC 通道。
+- **Host 面**（`lib/index.js`）：Cordis 插件，持有 `newapi` settings namespace；访问令牌通过 credentials 服务保存（绝不写入 `settings.yaml` 或 `cordis.yml`）；调用 NewAPI 管理 API（`/api/user/self`、`/api/token/`、`/api/user/models`、`/api/pricing`）；对浏览器暴露 `trusted-host` 授权的 `/newapi` RPC 通道。
 - **浏览器面**（`lib/client.js`）：`settings.section` slot 贡献（设置里的「NewAPI」页），基于共享 UI 原语构建。
 
 模型同步**不会**注册一个平行的 LLM 适配器：它把 provider profile 写进随产品发布的 `@deepseek-ai/dsh-llm-pi-ai` settings namespace（`providers.<route>`）——这是接入 OpenAI 兼容网关的官方途径。聊天模型选择器、目录合并、重试策略全部照常工作。令牌按环境变量名引用，不会被复制进配置。
@@ -69,7 +69,7 @@ dsh plugin --profile desktop add file:E:/dsh-desktop/dsh-plugin-newapi
 
 - 凭据（缓存的系统访问令牌，或旧式服务器的 session 值）只保存在本机凭据存储（`$DSH_HOME/.credentials.yaml`，权限 0600）：控制台凭据引用名为 `NEWAPI_SESSION`，聊天 API key 引用名为 `NEWAPI_API_KEY`。
 - 密钥明文绝不发给渲染进程；令牌列表只显示末 4 位。
-- `/newapi` RPC 通道仅限回环授权，与内置设置界面同一道边界。
+- `/newapi` RPC 通道使用 `trusted-host` 授权，与 DSH API 网关注册的边界一致：桌面窗口内可用，开启浏览器访问后在浏览器会话中同样可用。
 - 系统访问令牌每次登录至多生成一次（重新生成会使旧令牌失效），本地缓存仍能认证同一账号时直接复用，失效后才重新生成。
 - 会话续期换发的新 session 值由 Host 自动写回凭据存储（仅旧式 cookie 回退流程）。
 - 内嵌登录的 cookie 捕获只在你主动点击「打开登录页」期间进行，只读取所配置服务器源上的 `session` 这一个 cookie，读到的值立即经服务器验证后进入凭据存储；捕获结束后停止监听。该能力依赖 DSH Desktop 的 Electron 会话，普通 CLI 环境自动禁用。

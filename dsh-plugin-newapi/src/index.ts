@@ -8,7 +8,7 @@
  *    login and cached through the credentials service (ref `NEWAPI_SESSION`),
  *    while the chat API key sits under the ref named by config (`apiKeyEnv`,
  *    default NEWAPI_API_KEY).
- * 2. Expose a loopback-fenced Connection RPC channel `/newapi` for the bundled
+ * 2. Expose a trusted-host-fenced Connection RPC channel `/newapi` for the bundled
  *    settings page: server capability probing, password login, SSO bridging
  *    (open the console login page; the user pastes back an access token or
  *    session value, auto-detected and verified), and the enriched snapshot
@@ -110,10 +110,30 @@ const Config = z.object({
 export const name = 'dsh-plugin-newapi'
 export const inject = ['settings', 'credentials', 'connection']
 
-type RpcResult<T> = { ok: true, value: T } | { ok: false, error: { code: string, message: string } }
+type RpcResult<T> = { ok: true, value: T } | { ok: false, error: { code: string, message: string, details?: { code: string } } }
 
 function ok<T>(value: T): RpcResult<T> {
   return { ok: true, value }
+}
+
+/**
+ * Fire-and-forget a promise WITHOUT ever leaving an unhandled rejection
+ * behind. DSH Desktop installs an `uncaughtException` handler that exits the
+ * process, and Node turns an unhandled rejection into exactly that — so one
+ * `void somePromise` that rejects (a credential store hiccup mid-login, a
+ * settings write losing a race) takes the whole app down with it: the
+ * "signing in and the app just disappears" report.
+ *
+ * `void p.finally(cb)` is the same trap in disguise: `.finally` does not
+ * handle the rejection, it forwards it onto a NEW promise nobody is watching,
+ * so even a `p` that its own caller awaits still crashes the process through
+ * the derived one. `then(cb, cb)` handles both settlements instead.
+ */
+function detach(promise: Promise<unknown>, onSettled?: () => void, onError?: (error: unknown) => void): void {
+  void promise.then(
+    () => { onSettled?.() },
+    (error: unknown) => { onSettled?.(); onError?.(error) },
+  )
 }
 
 /**
@@ -137,6 +157,8 @@ interface StoredConfig {
   baseUrl?: string
   authKind?: string
   passwordLogin?: string
+  /** Display currency for quota/price figures: 'cny' (default) or 'usd'. */
+  currency?: string
   /** JSON string: Record<modelId, { contextWindow?: number, maxTokens?: number }>. */
   modelLimits?: string
   defaultContextWindow?: number
@@ -223,7 +245,18 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
   }
 
   const currentCredential = async (): Promise<{ kind: 'token' | 'session' | 'refresh', value: string } | undefined> => {
-    const hit = await ctx.credentials.resolve(sessionRef)
+    // Every caller already treats "no credential" as a normal state, so a
+    // credential store that throws (locked keychain, a lock contended by the
+    // login writing to it at the same moment) degrades to that rather than
+    // propagating out of paths — `config.get`, the detached snapshot flight —
+    // that must never fail on it.
+    let hit: { value?: unknown } | undefined
+    try {
+      hit = await ctx.credentials.resolve(sessionRef)
+    } catch (error) {
+      logger.warn(`newapi: reading the stored credential failed: ${describeError(error)}`)
+      return undefined
+    }
     if (typeof hit?.value !== 'string' || hit.value.length === 0) return undefined
     const kind = stored().authKind
     // Stored kind: 'token' is a long-lived system access token (访问令牌, sent
@@ -253,7 +286,7 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
         // token with a cookie while authKind stays 'token' — a broken state.
         const kind = stored().authKind
         if (kind === 'token' || kind === '') return
-        void ctx.credentials.set(sessionRef, value).catch((error: unknown) => {
+        detach(ctx.credentials.set(sessionRef, value), undefined, (error) => {
           logger.warn(`newapi: persisting rotated session failed: ${describeError(error)}`)
         })
       },
@@ -436,6 +469,7 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
     } catch (error) {
       logger.warn(`newapi: auto model sync failed: ${describeError(error)}`)
     }
+    return kind
   }
 
   /**
@@ -449,6 +483,10 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
    * marked stale (the cookie often lands a moment before the server-side
    * session is fully usable).
    */
+  const watchTickFailed = (error: unknown): void => {
+    logger.warn(`newapi: embedded login watch tick failed: ${describeError(error)}`)
+  }
+
   async function pollNativeCookie(attempt: NativeLogin, jar: ElectronSessionJar): Promise<void> {
     if (attempt.busy || attempt.status !== 'pending') return
     let cookies: ElectronCookie[]
@@ -511,8 +549,15 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
    * valid, so it (and the catalog route) are kept and chat keeps working.
    */
   async function signOutDeadCredential(): Promise<void> {
-    await ctx.credentials.unset(sessionRef)
-    await scope.update({ authKind: '' } as { baseUrl?: string, authKind?: string, passwordLogin?: string })
+    // Runs from inside refreshSnapshot's error path, so a failing credential
+    // store here must not turn a handled 401 into a rejected snapshot flight
+    // (see the unhandled-rejection note on `detach`).
+    try {
+      await ctx.credentials.unset(sessionRef)
+      await scope.update({ authKind: '' } as { baseUrl?: string, authKind?: string, passwordLogin?: string })
+    } catch (error) {
+      logger.warn(`newapi: clearing the dead credential failed: ${describeError(error)}`)
+    }
     snapshotClient = undefined
     snapshotClientKey = ''
     invalidateSnapshot()
@@ -567,7 +612,7 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
     }
     const electron = await loadElectron()
     const jar = electron?.session?.defaultSession?.cookies
-    if (electron === undefined || jar === undefined) {
+    if (electron === null || jar === undefined) {
       return fail('capability-unavailable', 'embedded sign-in needs the DSH Desktop app (Electron session access)')
     }
     const loginUrl = await resolveLoginUrl(baseUrl, info)
@@ -580,7 +625,7 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
           settleNativeLogin(attempt)
         }
       }, LOGIN_TIMEOUT_MS),
-      ticker: setInterval(() => { void pollNativeCookie(attempt, jar) }, LOGIN_POLL_MS),
+      ticker: setInterval(() => { detach(pollNativeCookie(attempt, jar), undefined, watchTickFailed) }, LOGIN_POLL_MS),
       status: 'pending',
       lastVerified: '',
       verifyTries: 0,
@@ -589,7 +634,7 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
     }
     nativeLogin = attempt
     openLoginWindow(attempt, electron, loginUrl)
-    void pollNativeCookie(attempt, jar)
+    detach(pollNativeCookie(attempt, jar), undefined, watchTickFailed)
     logger.info(`newapi: embedded login watching cookies for ${attempt.origin}`)
     return ok({ loginUrl })
   }
@@ -624,8 +669,17 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
       win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedUrl) => {
         logger.warn(`newapi: login window failed to load ${validatedUrl}: ${errorDescription} (${errorCode})`)
       })
-      win.webContents.on('console-message', (_event, level, message, line, sourceId) => {
-        logger.info(`newapi: login window console[${level}] ${sourceId}:${line}: ${message}`)
+      // Electron >= 37 passes ONE details object here; the old positional
+      // (event, level, message, line, sourceId) arguments were removed, so the
+      // previous signature logged five `undefined`s for every console line the
+      // login page emitted. Read both shapes and keep the log useful.
+      win.webContents.on('console-message', (...args: unknown[]) => {
+        const details = (args[0] ?? {}) as { level?: unknown, message?: unknown, lineNumber?: unknown, sourceId?: unknown }
+        const level = details.level ?? args[1]
+        const message = details.message ?? args[2]
+        const line = details.lineNumber ?? args[3]
+        const sourceId = details.sourceId ?? args[4]
+        logger.debug(`newapi: login window console[${String(level ?? '?')}] ${String(sourceId ?? '?')}:${String(line ?? '?')}: ${String(message ?? '')}`)
       })
       win.on('closed', () => {
         attempt.window = undefined
@@ -713,7 +767,7 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
     }
   }
 
-  void loadPersistedSnapshots()
+  detach(loadPersistedSnapshots())
 
   /**
    * Reuse the snapshot client across calls so its short-lived bearer survives;
@@ -732,7 +786,7 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
   function invalidateSnapshot(): void {
     snapshotCache = undefined
     rateLimitedUntil = 0
-    void dropPersistedSnapshots()
+    detach(dropPersistedSnapshots())
   }
 
   /** Serve the cached snapshot flagged as stale (offline / cooling down). */
@@ -750,56 +804,81 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
    */
   function refreshSnapshot(signal: AbortSignal | undefined): Promise<RpcResult<SnapshotPayload>> {
     const flight = (async (): Promise<RpcResult<SnapshotPayload>> => {
-      const baseUrl = currentBaseUrl()
-      if (baseUrl === '') return fail('not-configured', 'no NewAPI base URL configured')
-      // Cooldown check must live HERE, not only in fetchSnapshot: the stale
-      // cache serves a background refresh through this function on every
-      // non-force call, and skipping the check let UI polling pile a full
-      // 5-request burst onto the server every few seconds DURING the cooldown
-      // — the self-sustaining "always 429" loop.
-      const cooldown = Math.max(rateLimitedUntil - Date.now(), sharedCooldownRemaining())
-      if (cooldown > 0) return fail('rate-limited', `newapi: rate-limit cooldown active (${String(Math.ceil(cooldown / 1000))}s left)`)
-      const credential = await currentCredential()
-      if (credential === undefined) return fail('not-configured', 'no NewAPI credential configured')
-      const client = snapshotClientFor(baseUrl, credential)
       try {
-        const server = await client.getServerInfo(signal)
-        // User first: also confirms the credential is live.
-        const user = redactUser(await client.getUser(signal))
-        const [tokens, models, pricing] = await Promise.all([
-          client.getTokens(signal).catch((): NewApiToken[] => []),
-          client.getModels(signal),
-          client.getPricing(signal).catch(() => new Map<string, { input?: number, output?: number }>()),
-        ])
-        return ok({
-          baseUrl,
-          server,
-          user: redactUser(user),
-          tokens: redactTokens(tokens),
-          models: mergeModels(models, pricing),
-          usage: usageFromUser(user, server.quotaPerUnit),
-        })
+        const result = await runSnapshotFetch(signal)
+        // Store the fresh payload HERE, not at the awaiting call site: the
+        // stale-serve path returns its cached copy immediately and the joining
+        // callers get the flight itself, so neither of them ever reached
+        // fetchSnapshot's cache write. The cache therefore stayed stale
+        // forever and every read re-ran the full 6-request burst — the very
+        // traffic the TTL exists to prevent.
+        if (result.ok) {
+          snapshotCache = { payload: result.value, at: Date.now() }
+          detach(persistSnapshot(result.value.baseUrl, result.value))
+        }
+        return result
       } catch (error) {
-        if (error instanceof NewApiError && error.status === 429) {
-          // Mirror the transport's exponential cooldown (Retry-After honored
-          // there) so the host gate and the transport back off in lockstep.
-          rateLimitedUntil = Date.now() + Math.max(RATE_LIMIT_COOLDOWN_MS, sharedCooldownRemaining())
-          return fail('rate-limited', 'newapi: server rate limit (429) hit; wait a moment before retrying')
-        }
-        // A rejected credential means it was replaced server-side (another
-        // device signed in, or the token was regenerated on the web console
-        // — the account's only token changes). Sign out instead of fighting
-        // for the token: automatic re-mints from several logged-in clients
-        // rotate it endlessly and 429 the server. The user signs in again
-        // (one deliberate rotation) when they want usage data back.
-        if (error instanceof NewApiError && error.status === 401) {
-          await signOutDeadCredential()
-          return fail('token-expired', 'the access token was replaced on the server (another sign-in or a web regeneration); signed out — please sign in again')
-        }
+        // Never reject: this flight is shared with concurrent callers and
+        // detached for its cleanup, and an unhandled rejection is fatal to
+        // the whole desktop process (see `detach`). Everything below the
+        // inner try — the credential read, the client build, the sign-out
+        // path — can throw on a bad day, and none of it is worth a crash.
         return fail('fetch-failed', describeError(error))
       }
     })()
     return flight
+  }
+
+  /** The actual snapshot network fetch; only `refreshSnapshot` calls it. */
+  async function runSnapshotFetch(signal: AbortSignal | undefined): Promise<RpcResult<SnapshotPayload>> {
+    const baseUrl = currentBaseUrl()
+    if (baseUrl === '') return fail('not-configured', 'no NewAPI base URL configured')
+    // Cooldown check must live HERE, not only in fetchSnapshot: the stale
+    // cache serves a background refresh through this function on every
+    // non-force call, and skipping the check let UI polling pile a full
+    // 5-request burst onto the server every few seconds DURING the cooldown
+    // — the self-sustaining "always 429" loop.
+    const cooldown = Math.max(rateLimitedUntil - Date.now(), sharedCooldownRemaining())
+    if (cooldown > 0) return fail('rate-limited', `newapi: rate-limit cooldown active (${String(Math.ceil(cooldown / 1000))}s left)`)
+    const credential = await currentCredential()
+    if (credential === undefined) return fail('not-configured', 'no NewAPI credential configured')
+    const client = snapshotClientFor(baseUrl, credential)
+    try {
+      const server = await client.getServerInfo(signal)
+      // User first: also confirms the credential is live.
+      const user = redactUser(await client.getUser(signal))
+      const [tokens, models, pricing] = await Promise.all([
+        client.getTokens(signal).catch((): NewApiToken[] => []),
+        client.getModels(signal),
+        client.getPricing(signal).catch(() => new Map<string, { input?: number, output?: number }>()),
+      ])
+      return ok({
+        baseUrl,
+        server,
+        user: redactUser(user),
+        tokens: redactTokens(tokens),
+        models: mergeModels(models, pricing),
+        usage: usageFromUser(user, server.quotaPerUnit),
+      })
+    } catch (error) {
+      if (error instanceof NewApiError && error.status === 429) {
+        // Mirror the transport's exponential cooldown (Retry-After honored
+        // there) so the host gate and the transport back off in lockstep.
+        rateLimitedUntil = Date.now() + Math.max(RATE_LIMIT_COOLDOWN_MS, sharedCooldownRemaining())
+        return fail('rate-limited', 'newapi: server rate limit (429) hit; wait a moment before retrying')
+      }
+      // A rejected credential means it was replaced server-side (another
+      // device signed in, or the token was regenerated on the web console
+      // — the account's only token changes). Sign out instead of fighting
+      // for the token: automatic re-mints from several logged-in clients
+      // rotate it endlessly and 429 the server. The user signs in again
+      // (one deliberate rotation) when they want usage data back.
+      if (error instanceof NewApiError && error.status === 401) {
+        await signOutDeadCredential()
+        return fail('token-expired', 'the access token was replaced on the server (another sign-in or a web regeneration); signed out — please sign in again')
+      }
+      return fail('fetch-failed', describeError(error))
+    }
   }
 
   /**
@@ -828,21 +907,18 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
         // Stale: hand it out right away and refresh in the background.
         const background = refreshSnapshot(undefined)
         snapshotInFlight = background
-        void background.finally(() => { snapshotInFlight = undefined })
+        detach(background, () => { snapshotInFlight = undefined })
         return staleSnapshot() as RpcResult<SnapshotPayload>
       }
     }
     const flight = refreshSnapshot(signal)
     if (!force) {
       snapshotInFlight = flight
-      void flight.finally(() => { snapshotInFlight = undefined })
+      detach(flight, () => { snapshotInFlight = undefined })
     }
     const result = await flight
-    if (result.ok) {
-      snapshotCache = { payload: result.value, at: Date.now() }
-      void persistSnapshot(result.value.baseUrl, result.value)
-      return result
-    }
+    // refreshSnapshot already wrote the cache for a successful fetch.
+    if (result.ok) return result
     // Offline (or the fetch failed): fall back to the last known data, and
     // age the in-memory cache so later non-force calls also take the
     // stale-serve path (retrying in the background) instead of treating the
@@ -857,10 +933,15 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
 
   /** Light user-only view for widgets that just need the signed-in identity. */
   async function fetchUser(signal: AbortSignal | undefined): Promise<RpcResult<NewApiUser>> {
-    const cached = snapshotCache
-    if (cached !== undefined && Date.now() - cached.at < SNAPSHOT_TTL_MS) return ok(cached.payload.user)
+    // A cached snapshot can carry no user at all (an early payload, or one
+    // persisted before the identity resolved); serving that as a success made
+    // `user.get` answer `{ok: true, value: undefined}` and the footer render
+    // an identity-less account instead of falling back to the sign-in label.
+    const cachedUser = snapshotCache?.payload.user
+    const cachedAt = snapshotCache?.at ?? 0
+    if (cachedUser !== undefined && Date.now() - cachedAt < SNAPSHOT_TTL_MS) return ok(cachedUser)
     if (Date.now() < rateLimitedUntil || sharedCooldownRemaining() > 0) {
-      if (cached !== undefined) return ok(cached.payload.user)
+      if (cachedUser !== undefined) return ok(cachedUser)
       return fail('rate-limited', 'newapi: rate-limited by the server; retry shortly')
     }
     const baseUrl = currentBaseUrl()
@@ -873,7 +954,7 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
       if (error instanceof NewApiError && error.status === 429) rateLimitedUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS
       // Offline: keep the footer identity on the last known user instead of
       // dropping back to the "sign in" label.
-      if (cached !== undefined) return ok(cached.payload.user)
+      if (cachedUser !== undefined) return ok(cachedUser)
       return fail('fetch-failed', describeError(error))
     }
   }
@@ -921,7 +1002,7 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
     /** Stored config + credential status; never the secret value. */
     'config.get': async () => {
       // Cheap re-check: re-derives the chat key if it ever goes missing.
-      void ensureApiKeyStored()
+      detach(ensureApiKeyStored())
       const credential = await currentCredential()
       let sessionConfigured = false
       try {
@@ -1245,7 +1326,14 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
       logger.warn(`newapi: ${endpoint} failed: ${describeError(error)}`)
       return fail('internal', describeError(error))
     }
-  }, { authority: 'loopback' })
+  // `trusted-host`, not `loopback`: browser/LAN access (DSH Desktop's
+  // "allow opening this Profile in a browser") serves the same client bundle
+  // from a NON-loopback authority, and a loopback-fenced channel refuses every
+  // one of its calls — the NewAPI surface was simply dead there. This matches
+  // the fence the DSH API gateway itself registers, which already carries the
+  // whole agent API over that same browser session, so the channel is exactly
+  // as reachable as the app it belongs to and no wider.
+  }, { authority: 'trusted-host' })
 
   /**
    * Hide the chat models while they cannot work: when the chat API key is
@@ -1323,7 +1411,7 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
       }
     })()
     reconcileInFlight = flight
-    void flight.finally(() => { reconcileInFlight = undefined })
+    detach(flight, () => { reconcileInFlight = undefined })
     return flight
   }
 
@@ -1334,7 +1422,7 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
   // CredentialRef shape (a branded string or an object carrying `name`).
   ctx.on('credentials/reference-updated', (changed) => {
     if (changed !== ref && String(changed) !== apiKeyEnv) return
-    void reconcileCatalogVisibility('api key credential changed')
+    detach(reconcileCatalogVisibility('api key credential changed'))
   })
 
   /**
@@ -1415,8 +1503,9 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
         | undefined
       const routeProfile = section?.providers?.[route]
       if (routeProfile === undefined || !Array.isArray(routeProfile.models) || routeProfile.models.length === 0) return
+      const storedModels: unknown[] = routeProfile.models
       const limits = readModelLimits(stored().modelLimits)
-      const healed = routeProfile.models.map((model: unknown) => {
+      const healed = storedModels.map((model: unknown) => {
         if (typeof model !== 'object' || model === null) return model
         const entry = model as { id?: unknown, contextWindow?: unknown, input?: unknown }
         if (typeof entry.id !== 'string') return model
@@ -1429,7 +1518,7 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
         }
         return next === entry ? model : next
       })
-      if (healed.every((model: unknown, index: number) => model === routeProfile.models?.[index])) return
+      if (healed.every((model: unknown, index: number) => model === storedModels[index])) return
       await ctx.settings.update(LLM_PI_AI_NS, {
         providers: { [route]: { ...routeProfile, models: healed } },
       } as Parameters<typeof ctx.settings.update>[1])
@@ -1439,7 +1528,7 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
     }
   }
 
-  void (async () => {
+  detach((async () => {
     // Token migration first: it converts cookie installs before anything else
     // can spend a refresh exchange on them. The key self-heal can itself fire
     // the credential event, so the reconcile below may share its in-flight
@@ -1448,7 +1537,9 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
     await ensureApiKeyStored()
     await reconcileCatalogVisibility('api key missing at startup')
     await healStoredRouteLimits()
-  })()
+  })(), undefined, (error) => {
+    logger.warn(`newapi: startup maintenance failed: ${describeError(error)}`)
+  })
 
   logger.info(`newapi: ready (route=${route}, apiKeyEnv=${apiKeyEnv})`)
 }
