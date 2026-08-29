@@ -17,3 +17,4 @@ dsh-community-market/lib/
 .npm-cache/
 .tmp_wheel_check
 .tmp_repro/
+dsh-plugin-newapi/dist/

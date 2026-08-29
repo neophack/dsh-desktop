@@ -20,6 +20,10 @@
  */
 import type { NewApiModel, NewApiToken, NewApiUser, NewApiUsage } from './types.ts'
 
+// Re-exported so callers can take the wire types from the client module they
+// already import (src/index.ts does); a plain `import type` does not re-export.
+export type { NewApiModel, NewApiToken, NewApiUser, NewApiUsage }
+
 export const QUOTA_PER_UNIT_FALLBACK = 500_000
 
 export interface NewApiAuth {

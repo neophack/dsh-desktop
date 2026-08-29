@@ -22,7 +22,7 @@ Sign-in itself runs through NewAPI's browser flow (`session` cookie + short-live
 
 The plugin is composed of two halves, exactly like official DSH plugins:
 
-- **Host half** (`lib/index.js`) — a Cordis plugin that owns a `newapi` settings namespace, stores the access token through the credentials service (never in `settings.yaml` or `cordis.yml`), talks to the NewAPI management API (`/api/user/self`, `/api/token/`, `/api/user/models`, `/api/pricing`), and exposes a loopback-fenced Connection RPC channel `/newapi` for the UI.
+- **Host half** (`lib/index.js`) — a Cordis plugin that owns a `newapi` settings namespace, stores the access token through the credentials service (never in `settings.yaml` or `cordis.yml`), talks to the NewAPI management API (`/api/user/self`, `/api/token/`, `/api/user/models`, `/api/pricing`), and exposes a trusted-host-fenced Connection RPC channel `/newapi` for the UI.
 - **Browser half** (`lib/client.js`) — a `settings.section` slot contribution (the "NewAPI" page in Settings) built on the shared UI primitives.
 
 Model sync deliberately does **not** register a parallel LLM adapter. It writes a provider profile into the shipped `@deepseek-ai/dsh-llm-pi-ai` settings namespace (`providers.<route>`), which is the official way to add an OpenAI-compatible gateway route. The chat model selector, catalog joins, and retry policies all keep working unchanged. The token is referenced by env name, not copied.
@@ -69,7 +69,7 @@ Then open **Settings → NewAPI** (or the sidebar login button). With `baseUrl` 
 
 - The credential (the cached system access token, or a session value on pre-token servers) lives only in the local credentials store (`$DSH_HOME/.credentials.yaml`, 0600); the console credential under the `NEWAPI_SESSION` reference, the chat API key under `NEWAPI_API_KEY`.
 - Key material is never sent to the renderer; the token list is masked to the last 4 characters.
-- The `/newapi` RPC channel is loopback-authority only, same as the built-in settings surface.
+- The `/newapi` RPC channel uses the `trusted-host` authority, the same fence the DSH API gateway registers, so it works both in the desktop window and in a browser session when browser access is enabled.
 - The system access token is minted at most once per login (regeneration invalidates older tokens), reused from the local cache while it still authenticates the same account, and replaced only when it stops working.
 - Sessions renewed mid-flight are persisted back by the Host automatically (fallback cookie flow only).
 - The embedded sign-in's cookie capture runs only while you explicitly keep the sign-in page open, reads exactly one cookie (`session`) for the configured server origin, and stores it after verifying it against the server; the watch stops as soon as the attempt settles. It relies on the DSH Desktop Electron session and disables itself in ordinary CLI Hosts.

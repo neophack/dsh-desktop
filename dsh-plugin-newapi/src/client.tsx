@@ -11,7 +11,7 @@
  *   address override, probe, password-login switch, currency, account
  *   details, API keys, model catalog with per-model limits, and model sync.
  *
- * Both talk to the Host half through the loopback-fenced `/newapi` Connection
+ * Both talk to the Host half through the trusted-host-fenced `/newapi` Connection
  * RPC channel. Model sync writes the official `llm-pi-ai` settings namespace,
  * so the chat model selector picks the route up through the normal catalog;
  * no private APIs.
@@ -26,7 +26,7 @@
  * authenticated session automatically; no copy-paste involved.
  */
 import { jsx, jsxs } from 'react/jsx-runtime'
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import { Button, IconUserOutline16, Input, Modal, Pill, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 
@@ -213,9 +213,239 @@ function injectFooterRowStyle(): () => void {
   return () => { tag.remove() }
 }
 
+const SETTINGS_STYLE_TAG = 'dsh-plugin-newapi/settings-styles'
+
+/**
+ * Settings-page stylesheet, mirroring the desktop settings section design
+ * (dsh-plugin-desktop's `dshDesktopSettings*` classes): an 880px column of
+ * groups separated by hairline rules, h3 + intro headers, 10px toggle rows,
+ * pill buttons, and Notice/Error/Success strips — so the NewAPI page reads
+ * as a native member of the same Settings shell. Self-hosted (rather than
+ * reusing those class names) because the desktop plugin is a separate
+ * package that this plugin must not depend on.
+ */
+const SETTINGS_CSS = `
+.dshNewApiSettings {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  width: min(100%, 880px);
+  padding: 2px 0 36px;
+  color: var(--dsw-alias-label-primary);
+}
+.dshNewApiSettingsHeader h2,
+.dshNewApiSettingsGroup h3 { margin: 0; font-weight: 600; }
+.dshNewApiSettingsHeader h2 { font-size: 22px; line-height: 1.35; letter-spacing: -0.015em; }
+.dshNewApiSettingsGroup h3 { font-size: 15px; line-height: 1.4; letter-spacing: -0.01em; }
+.dshNewApiSettingsHeader p,
+.dshNewApiSettingsIntro,
+.dshNewApiSettingsHint {
+  margin: 6px 0 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.dshNewApiSettingsGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-top: 28px;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+.dshNewApiSettingsForm {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.dshNewApiSettingsField {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+}
+.dshNewApiSettingsFieldNarrow { flex: 0 0 auto; }
+.dshNewApiSettingsInput {
+  width: 100%;
+  min-height: 36px;
+  box-sizing: border-box;
+  padding: 7px 11px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  outline: none;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 13px;
+}
+.dshNewApiSettingsInput:focus-visible {
+  border-color: var(--dsw-alias-brand-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-brand-primary) 20%, transparent);
+}
+.dshNewApiSettingsActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.dshNewApiSettingsButton {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 5px 13px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.dshNewApiSettingsButton:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
+.dshNewApiSettingsButton:disabled { cursor: default; opacity: .55; }
+.dshNewApiSettingsButtonSecondary { color: var(--dsw-alias-label-secondary); }
+.dshNewApiSettingsNotice,
+.dshNewApiSettingsError,
+.dshNewApiSettingsSuccess {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.dshNewApiSettingsNotice { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary); }
+.dshNewApiSettingsError { color: var(--dsw-alias-state-error-primary); background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent); }
+.dshNewApiSettingsSuccess { color: var(--dsw-alias-state-success-primary); background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 10%, transparent); }
+.dshNewApiSettingsToggleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  padding: 13px 14px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-1);
+  font-size: 13px;
+}
+.dshNewApiSettingsToggle {
+  flex: 0 0 auto;
+  position: relative;
+  width: 40px;
+  height: 22px;
+  padding: 2px;
+  border: none;
+  border-radius: 999px;
+  background: var(--dsw-alias-border-l2);
+  cursor: pointer;
+  transition: background-color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+.dshNewApiSettingsToggle[aria-checked="true"] { background: var(--dsw-alias-brand-primary); }
+.dshNewApiSettingsToggle:disabled { cursor: default; opacity: .5; }
+.dshNewApiSettingsToggle:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: 2px;
+}
+.dshNewApiSettingsToggleKnob {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--dsw-alias-label-primary-foreground);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .24);
+  transform: translateX(0);
+  transition: transform var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+.dshNewApiSettingsToggle[aria-checked="true"] .dshNewApiSettingsToggleKnob { transform: translateX(18px); }
+.dshNewApiSettingsDl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 20px;
+  font-size: 13px;
+}
+.dshNewApiSettingsDl dt { color: var(--dsw-alias-label-secondary); }
+.dshNewApiSettingsDl dd { margin: 0; font-variant-numeric: tabular-nums; }
+.dshNewApiUsage {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.dshNewApiUsageTrack {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--dsw-alias-bg-layer-2);
+}
+.dshNewApiUsageFill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--dsw-alias-brand-primary, var(--dsw-alias-button-primary-fill));
+  transition: width 320ms cubic-bezier(0.22, 1, 0.36, 1), background-color 320ms ease;
+}
+.dshNewApiUsageFill[data-warn="true"] { background: var(--dsw-alias-state-warn-primary, #e6a700); }
+.dshNewApiUsagePercent {
+  flex: 0 0 auto;
+  min-width: 42px;
+  text-align: right;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.dshNewApiSettingsTableWrap { overflow-x: auto; }
+.dshNewApiSettingsTable { border-collapse: collapse; font-size: 13px; }
+.dshNewApiSettingsTable th,
+.dshNewApiSettingsTable td { padding: 8px 16px 8px 0; text-align: left; }
+.dshNewApiSettingsTable td { font-variant-numeric: tabular-nums; }
+.dshNewApiSettingsTable th {
+  padding-top: 0;
+  padding-bottom: 10px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+.dshNewApiSettingsTable tbody tr + tr td { border-top: 1px solid var(--dsw-alias-border-l1); }
+.dshNewApiSettingsTable tbody tr:hover td { background: var(--dsw-alias-interactive-bg-hover, transparent); }
+.dshNewApiSettingsStatus { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.dshNewApiSettingsKeyOnce {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-secondary);
+}
+.dshNewApiSettingsKeyOnce code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; color: var(--dsw-alias-label-primary); }
+@media (max-width: 720px) {
+  .dshNewApiSettingsForm { align-items: stretch; flex-direction: column; }
+  .dshNewApiSettingsToggleRow { align-items: flex-start; }
+}
+`
+
+function injectSettingsStyle(): () => void {
+  if (typeof document === 'undefined') return () => {}
+  const existing = document.querySelector(`style[data-plugin-css="${SETTINGS_STYLE_TAG}"]`)
+  if (existing !== null) return () => {}
+  const tag = document.createElement('style')
+  tag.dataset.pluginCss = SETTINGS_STYLE_TAG
+  tag.textContent = SETTINGS_CSS
+  document.head.appendChild(tag)
+  return () => { tag.remove() }
+}
+
 export function apply(ctx: ClientCtx): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'newapi: copy dictionaries')
   ctx.effect(injectFooterRowStyle, 'newapi: sidebar footer row layout')
+  ctx.effect(injectSettingsStyle, 'newapi: settings page styles')
   const connection = ctx.get('connection') as {
     rpc: { call: <T>(channel: string, endpoint: string, payload?: unknown, signal?: AbortSignal) => Promise<RpcResult<T>> }
   }
@@ -473,9 +703,10 @@ const cardTitleStyle = {
 } as const
 
 /**
- * Flat usage progress bar: a hairline pill track on layer-2 with a brand
- * fill; the percent label sits on the same row so the bar itself stays a
- * pure 6px slab. Used ratio is clamped to [0, 1]; warn color past 80%.
+ * Usage progress bar, Claude/Codex-style: a quiet 8px pill track on layer-2
+ * with a flat brand fill and the percent set apart on the right in tabular
+ * numerals — the bar itself stays a pure slab, no stripes or gradients. Used
+ * ratio is clamped to [0, 1]; the fill switches to the warn color past 80%.
  */
 function UsageBar(props: { used: number | undefined, total: number | undefined }): JSX.Element {
   const { used, total } = props
@@ -483,31 +714,21 @@ function UsageBar(props: { used: number | undefined, total: number | undefined }
   const ratio = known ? Math.min(1, Math.max(0, used / total)) : 0
   const warn = known && ratio >= 0.8
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+    <div className="dshNewApiUsage">
       <div
         role="progressbar"
         aria-valuemin={0}
         aria-valuemax={known ? 100 : undefined}
         aria-valuenow={known ? Math.round(ratio * 100) : undefined}
-        style={{
-          flex: 1, height: 6, borderRadius: 3, overflow: 'hidden',
-          background: 'var(--dsw-alias-bg-layer-2, rgba(128,128,128,0.18))',
-        }}
+        className="dshNewApiUsageTrack"
       >
-        <div style={{
-          width: known ? `${Math.round(ratio * 100)}%` : 0,
-          height: '100%', borderRadius: 3, transition: 'width 240ms ease',
-          background: warn
-            ? 'var(--dsw-alias-state-warn-primary, #e6a700)'
-            : 'var(--dsw-alias-brand-primary, var(--dsw-alias-button-primary-fill, #4a6cf7))',
-        }} />
+        <div
+          className="dshNewApiUsageFill"
+          data-warn={warn ? 'true' : undefined}
+          style={{ width: known ? `${Math.round(ratio * 100)}%` : 0 }}
+        />
       </div>
-      <span style={{
-        fontSize: 12, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
-        color: 'var(--dsw-alias-label-secondary, inherit)',
-      }}>
-        {known ? `${Math.round(ratio * 100)}%` : '--'}
-      </span>
+      <span className="dshNewApiUsagePercent">{known ? `${Math.round(ratio * 100)}%` : '--'}</span>
     </div>
   )
 }
@@ -619,7 +840,14 @@ function NewApiFooterButton(props: FooterProps): JSX.Element | null {
           <NewApiPopup call={call} t={t} autoLogin onAuthenticated={close} />
         </div>
       </Modal>
-      <Modal open={initOpen} onClose={closeInit} title={t('initTitle')} closeLabel={t('close')}>
+      {/*
+        * Never mount both popups at once. Each one auto-starts its own
+        * embedded login, and `login.native.start` replaces (and closes) the
+        * previous attempt's window — so a user who clicks the footer button
+        * while the first-run dialog is up saw the sign-in window flash open
+        * and disappear. The explicit popup wins; the init dialog waits.
+        */}
+      <Modal open={initOpen && !open} onClose={closeInit} title={t('initTitle')} closeLabel={t('close')}>
         <div style={{ maxHeight: '70vh', overflowY: 'auto' }}>
           <p style={{ margin: '0 0 10px', fontSize: 13, lineHeight: '20px', color: 'var(--dsw-alias-label-secondary, inherit)' }}>
             {t('initHint')}
@@ -708,6 +936,19 @@ function useNewApiSession(
   const [error, setError] = useState<string | undefined>(undefined)
   const [snapshot, setSnapshot] = useState<SnapshotView | undefined>(undefined)
   const [syncing, setSyncing] = useState(false)
+  /**
+   * Live for as long as this surface is mounted. The mount sequence awaits
+   * several RPCs before it may auto-start the login, and the popup can be
+   * closed in between; opening the Host's sign-in window then leaves it
+   * orphaned — nothing polls it and nothing cancels it, so it sits there for
+   * the full 10-minute attempt timeout.
+   */
+  const mountedRef = useRef(true)
+  useEffect(() => () => { mountedRef.current = false }, [])
+  /** Guards against two overlapping `login.native.start` calls (double click,
+   *  a re-mount, the reopen button): the second one settles and CLOSES the
+   *  first attempt's window, which reads as the login window flashing away. */
+  const startingRef = useRef(false)
 
   const loadConfig = async (): Promise<ConfigView | undefined> => {
     const result = await call<ConfigView>('config.get')
@@ -762,16 +1003,30 @@ function useNewApiSession(
    *  authorize page in a dedicated login window and captures the session
    *  cookie automatically the moment the sign-in there succeeds. */
   const startEmbeddedLogin = async (url: string): Promise<void> => {
+    if (startingRef.current) return
+    startingRef.current = true
     setBusy(true)
     setError(undefined)
     setMessage(undefined)
-    const result = await call<{ loginUrl: string }>('login.native.start', { baseUrl: url })
+    let result
+    try {
+      result = await call<{ loginUrl: string }>('login.native.start', { baseUrl: url })
+    } finally {
+      startingRef.current = false
+    }
+    if (!mountedRef.current) {
+      // Closed while the Host was opening the window: cancel it instead of
+      // leaving an unwatched sign-in window on screen.
+      if (result.ok) void call('login.native.cancel')
+      return
+    }
     setBusy(false)
     if (!result.ok) {
       setError(result.error.message)
       return
     }
     setEmbedded(result.value)
+    embeddedRef.current = result.value
   }
 
   useEffect(() => {
@@ -782,7 +1037,7 @@ function useNewApiSession(
       await loadSnapshot()
       // Footer entry + not signed in + a usable address: open the provider
       // authorize page immediately — no config form in between.
-      if (autoLogin === true && loaded !== undefined && !loaded.tokenConfigured && loaded.baseUrl !== '') {
+      if (mountedRef.current && autoLogin === true && loaded !== undefined && !loaded.tokenConfigured && loaded.baseUrl !== '') {
         await startEmbeddedLogin(loaded.baseUrl)
       }
     })()
@@ -955,6 +1210,28 @@ function StatusStrip(props: { error: string | undefined, message: string | undef
       {message !== undefined && (
         <span style={{ color: 'var(--dsw-alias-state-success-primary, #3a3)' }}>{message}</span>
       )}
+    </div>
+  )
+}
+
+/** Settings-page switch row, matching the desktop settings ToggleRow face. */
+function SettingsToggleRow(props: { label: string, checked: boolean, disabled?: boolean, onChange: (checked: boolean) => void }): JSX.Element {
+  const { label, checked, disabled, onChange } = props
+  const labelId = useId()
+  return (
+    <div className="dshNewApiSettingsToggleRow">
+      <span id={labelId}>{label}</span>
+      <button
+        type="button"
+        role="switch"
+        className="dshNewApiSettingsToggle"
+        aria-checked={checked}
+        aria-labelledby={labelId}
+        disabled={disabled}
+        onClick={() => { onChange(!checked) }}
+      >
+        <span className="dshNewApiSettingsToggleKnob" aria-hidden="true" />
+      </button>
     </div>
   )
 }
@@ -1271,157 +1548,196 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
   if (props.call === undefined || props.t === undefined) return null
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 720 }}>
-      <p style={{ margin: 0, fontSize: 13, lineHeight: '20px', color: 'var(--dsw-alias-label-secondary, inherit)' }}>{t('intro')}</p>
+    <div className="dshNewApiSettings">
+      <header className="dshNewApiSettingsHeader">
+        <h2>{t('nav')}</h2>
+        <p>{t('intro')}</p>
+      </header>
 
-      <StatusStrip error={error} message={message} t={t} />
+      {error !== undefined && <p className="dshNewApiSettingsError" role="alert">{t('failure')}: {error}</p>}
+      {message !== undefined && <p className="dshNewApiSettingsSuccess" role="status">{message}</p>}
 
       {/* Server configuration — settings page only. */}
-      {config === undefined
-        ? (
-            <section style={{ ...cardStyle, alignItems: 'center' }}>
-              <span style={{ fontSize: 13, color: 'var(--dsw-alias-label-secondary, inherit)' }}>
-                {configLoaded ? t('loadFailed') : t('loading')}
-              </span>
-              {configLoaded && <Button size="sm" disabled={busy} onClick={() => void loadConfig()}>{t('refresh')}</Button>}
-            </section>
-          )
-        : (
-            <section style={cardStyle}>
-              <h4 style={cardTitleStyle}>{t('baseUrl')}</h4>
-              <Input
-                value={baseUrl}
-                placeholder={config.baseUrlDefault !== '' ? config.baseUrlDefault : t('baseUrlPlaceholder')}
-                onChange={(event: ChangeEvent<HTMLInputElement>) => setBaseUrl(event.target.value)}
-                spellCheck={false}
-                autoComplete="off"
-              />
-              {config.baseUrlDefault !== '' && (
-                <p style={{ margin: 0, fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary, inherit)' }}>
-                  {t('defaultServer', { url: config.baseUrlDefault })}
-                </p>
-              )}
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <Button size="sm" disabled={busy || baseUrl.trim() === ''} onClick={() => void onProbe()}>
-                  {busy ? t('probing') : t('probe')}
-                </Button>
-                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={passwordLoginOn}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => setPasswordLoginOn(event.target.checked)}
-                  />
-                  <span>{t('enablePasswordLogin')}</span>
-                </label>
-                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-                  <span>{t('currencyLabel')}</span>
-                  <select
-                    value={currency}
-                    onChange={(event: ChangeEvent<HTMLSelectElement>) => {
-                      const next = event.target.value
-                      setCurrency(next === 'usd' ? 'usd' : 'cny')
-                    }}
-                    style={{ fontFamily: 'inherit', fontSize: 13 }}
-                  >
-                    <option value="cny">{t('currencyCny')}</option>
-                    <option value="usd">{t('currencyUsd')}</option>
-                  </select>
-                </label>
-                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-                  <span>{t('defaultContextWindowLabel')}</span>
-                  <Input
-                    value={defaultContextWindow}
-                    placeholder="131072"
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => setDefaultContextWindow(event.target.value)}
-                    style={{ width: 110 }}
-                    inputMode="numeric"
-                    spellCheck={false}
-                  />
-                </label>
-                <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-tertiary, inherit)' }}>{t('defaultContextWindowHint')}</span>
-                <Button size="sm" variant="primary" disabled={busy} onClick={() => void onSaveSettings()}>
-                  {t('saveSettings')}
-                </Button>
-              </div>
-              {server !== undefined && (
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: 13 }}>
-                  <StateDot state="done" />
-                  <span>{server.systemName} {server.version !== '' ? `(${server.version})` : ''}</span>
-                  {oauthProviders.map((provider) => <Pill key={provider.slug}>{provider.name}</Pill>)}
-                </span>
-              )}
-            </section>
+      <section className="dshNewApiSettingsGroup" aria-label={t('baseUrl')}>
+        <div>
+          <h3>{t('baseUrl')}</h3>
+          {config?.baseUrlDefault !== undefined && config.baseUrlDefault !== '' && (
+            <p className="dshNewApiSettingsIntro">{t('defaultServer', { url: config.baseUrlDefault })}</p>
           )}
+        </div>
+        {config === undefined
+          ? (
+              <div>
+                <p className="dshNewApiSettingsHint">{configLoaded ? t('loadFailed') : t('loading')}</p>
+                {configLoaded && (
+                  <button type="button" className="dshNewApiSettingsButton" disabled={busy} onClick={() => { void loadConfig() }}>
+                    {t('refresh')}
+                  </button>
+                )}
+              </div>
+            )
+          : (
+              <>
+                <form
+                  className="dshNewApiSettingsForm"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    void onSaveSettings()
+                  }}
+                >
+                  <label className="dshNewApiSettingsField">
+                    <span aria-hidden="true">{t('baseUrl')}</span>
+                    <input
+                      className="dshNewApiSettingsInput"
+                      value={baseUrl}
+                      placeholder={config.baseUrlDefault !== '' ? config.baseUrlDefault : t('baseUrlPlaceholder')}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) => setBaseUrl(event.target.value)}
+                      spellCheck={false}
+                      autoComplete="off"
+                    />
+                  </label>
+                  <button type="submit" className="dshNewApiSettingsButton" disabled={busy}>
+                    {t('saveSettings')}
+                  </button>
+                  <button
+                    type="button"
+                    className="dshNewApiSettingsButton dshNewApiSettingsButtonSecondary"
+                    disabled={busy || baseUrl.trim() === ''}
+                    onClick={() => { void onProbe() }}
+                  >
+                    {busy ? t('probing') : t('probe')}
+                  </button>
+                </form>
+                <SettingsToggleRow
+                  label={t('enablePasswordLogin')}
+                  checked={passwordLoginOn}
+                  disabled={busy}
+                  onChange={setPasswordLoginOn}
+                />
+                <form className="dshNewApiSettingsForm">
+                  <label className="dshNewApiSettingsField dshNewApiSettingsFieldNarrow">
+                    {t('currencyLabel')}
+                    <select
+                      className="dshNewApiSettingsInput"
+                      value={currency}
+                      onChange={(event: ChangeEvent<HTMLSelectElement>) => {
+                        const next = event.target.value
+                        setCurrency(next === 'usd' ? 'usd' : 'cny')
+                      }}
+                    >
+                      <option value="cny">{t('currencyCny')}</option>
+                      <option value="usd">{t('currencyUsd')}</option>
+                    </select>
+                  </label>
+                  <label className="dshNewApiSettingsField dshNewApiSettingsFieldNarrow">
+                    {t('defaultContextWindowLabel')}
+                    <input
+                      className="dshNewApiSettingsInput"
+                      value={defaultContextWindow}
+                      placeholder="131072"
+                      onChange={(event: ChangeEvent<HTMLInputElement>) => setDefaultContextWindow(event.target.value)}
+                      style={{ width: 110 }}
+                      inputMode="numeric"
+                      spellCheck={false}
+                    />
+                  </label>
+                </form>
+                <p className="dshNewApiSettingsHint">{t('defaultContextWindowHint')}</p>
+                {server !== undefined && (
+                  <p className="dshNewApiSettingsNotice">
+                    <span className="dshNewApiSettingsStatus">
+                      <StateDot state="done" />
+                      <span>{server.systemName} {server.version !== '' ? `(${server.version})` : ''}</span>
+                      {oauthProviders.map((provider) => <Pill key={provider.slug}>{provider.name}</Pill>)}
+                    </span>
+                  </p>
+                )}
+              </>
+            )}
+      </section>
 
       {/* Sign-in */}
-      <section style={cardStyle}>
-        <h4 style={cardTitleStyle}>{t('login')}</h4>
+      <section className="dshNewApiSettingsGroup" aria-label={t('login')}>
+        <div><h3>{t('login')}</h3></div>
         {embedded !== undefined
           ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <p style={{ margin: 0, fontSize: 13, lineHeight: '20px', color: 'var(--dsw-alias-label-secondary, inherit)' }}>
-                {t('embeddedWaiting', { provider: providerLabel })}
-              </p>
-              <div
-                style={{
-                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                  gap: 12, padding: '32px 16px', borderRadius: 10,
-                  border: '1px dashed var(--dsw-alias-border-l2, rgba(128,128,128,0.35))',
-                  background: 'var(--dsw-alias-bg-layer-1, transparent)', textAlign: 'center',
-                }}
-              >
-                <span style={{ fontSize: 14 }}>{t('embeddedWindowHint', { provider: providerLabel })}</span>
-                <Button size="sm" disabled={busy} onClick={() => void startEmbeddedLogin(baseUrl)}>
-                  {busy ? t('probing') : t('embeddedReopen')}
-                </Button>
-              </div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: 13 }}>
-                <Button size="sm" onClick={() => void onEmbeddedCancel()}>{t('embeddedCancel')}</Button>
-                <span style={{ color: 'var(--dsw-alias-label-tertiary, inherit)' }}>{t('embeddedCaptureNote')}</span>
-              </div>
-            </div>
-          )
-          : (
-            <>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <Button variant="primary" size="sm" disabled={busy || baseUrl.trim() === ''} onClick={() => void onEmbeddedLogin()}>
-                  {t('ssoButton', { provider: providerLabel })}
-                </Button>
-                {config !== undefined && (
-                  <Button size="sm" disabled={busy} onClick={() => void onClear()}>{t('clear')}</Button>
-                )}
-                {config !== undefined && (
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                    <StateDot state={configured ? 'done' : 'warning'} />
-                    {configured ? t('saved') : t('notConfigured')}
-                  </span>
-                )}
-              </div>
-              {passwordLoginOn && server?.passwordLogin === true && (
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <Input
-                    value={username}
-                    placeholder={t('username')}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => setUsername(event.target.value)}
-                    autoComplete="off"
-                    spellCheck={false}
-                    style={{ width: 160 }}
-                  />
-                  <Input
-                    value={password}
-                    type="password"
-                    placeholder={t('password')}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => setPassword(event.target.value)}
-                    autoComplete="off"
-                    style={{ width: 160 }}
-                  />
-                  <Button size="sm" disabled={busy || baseUrl.trim() === '' || username.trim() === '' || password === ''} onClick={() => void onPasswordLogin()}>
-                    {busy ? t('loggingIn') : t('loginButton')}
-                  </Button>
+              <>
+                <p className="dshNewApiSettingsHint">{t('embeddedWindowHint', { provider: providerLabel })} — {t('embeddedWaiting', { provider: providerLabel })}</p>
+                <div className="dshNewApiSettingsActions">
+                  <button type="button" className="dshNewApiSettingsButton" disabled={busy} onClick={() => { void startEmbeddedLogin(baseUrl) }}>
+                    {t('embeddedReopen')}
+                  </button>
+                  <button type="button" className="dshNewApiSettingsButton dshNewApiSettingsButtonSecondary" onClick={() => { void onEmbeddedCancel() }}>
+                    {t('embeddedCancel')}
+                  </button>
                 </div>
-              )}
-            </>
-          )}
+                <p className="dshNewApiSettingsNotice">{t('embeddedCaptureNote')}</p>
+              </>
+            )
+          : (
+              <>
+                <div className="dshNewApiSettingsActions">
+                  <button
+                    type="button"
+                    className="dshNewApiSettingsButton"
+                    disabled={busy || baseUrl.trim() === ''}
+                    onClick={() => { void onEmbeddedLogin() }}
+                  >
+                    {t('ssoButton', { provider: providerLabel })}
+                  </button>
+                  {config !== undefined && (
+                    <button type="button" className="dshNewApiSettingsButton dshNewApiSettingsButtonSecondary" disabled={busy} onClick={() => { void onClear() }}>
+                      {t('clear')}
+                    </button>
+                  )}
+                  {config !== undefined && (
+                    <span className="dshNewApiSettingsStatus">
+                      <StateDot state={configured ? 'done' : 'warning'} />
+                      {configured ? t('saved') : t('notConfigured')}
+                    </span>
+                  )}
+                </div>
+                {passwordLoginOn && server?.passwordLogin === true && (
+                  <form
+                    className="dshNewApiSettingsForm"
+                    onSubmit={(event) => {
+                      event.preventDefault()
+                      void onPasswordLogin()
+                    }}
+                  >
+                    <label className="dshNewApiSettingsField dshNewApiSettingsFieldNarrow">
+                      {t('username')}
+                      <input
+                        className="dshNewApiSettingsInput"
+                        value={username}
+                        onChange={(event: ChangeEvent<HTMLInputElement>) => setUsername(event.target.value)}
+                        autoComplete="off"
+                        spellCheck={false}
+                        style={{ width: 160 }}
+                      />
+                    </label>
+                    <label className="dshNewApiSettingsField dshNewApiSettingsFieldNarrow">
+                      {t('password')}
+                      <input
+                        className="dshNewApiSettingsInput"
+                        type="password"
+                        value={password}
+                        onChange={(event: ChangeEvent<HTMLInputElement>) => setPassword(event.target.value)}
+                        autoComplete="off"
+                        style={{ width: 160 }}
+                      />
+                    </label>
+                    <button
+                      type="submit"
+                      className="dshNewApiSettingsButton"
+                      disabled={busy || baseUrl.trim() === '' || username.trim() === '' || password === ''}
+                    >
+                      {busy ? t('loggingIn') : t('loginButton')}
+                    </button>
+                  </form>
+                )}
+              </>
+            )}
       </section>
 
       {snapshot !== undefined && (
@@ -1429,95 +1745,106 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
           <StaleNote snapshot={snapshot} t={t} />
 
           {/* Account details + plan usage bar */}
-          <section style={cardStyle}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <h4 style={{ ...cardTitleStyle, flex: 1 }}>{t('account')}</h4>
-              <Button size="sm" disabled={busy} onClick={() => void onRefresh()}>{t('refresh')}</Button>
+          <section className="dshNewApiSettingsGroup" aria-label={t('account')}>
+            <div>
+              <h3>{t('account')}</h3>
             </div>
-            <UsageBar used={snapshot.usage.quotaUsed} total={snapshot.usage.quotaTotal} />
-            <dl style={{ margin: 0, display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 16px', fontSize: 13 }}>
-              <dt style={{ color: 'var(--dsw-alias-label-secondary, inherit)' }}>{t('usernameLabel')}</dt>
-              <dd style={{ margin: 0 }}>
+            <div className="dshNewApiSettingsActions">
+              <button type="button" className="dshNewApiSettingsButton dshNewApiSettingsButtonSecondary" disabled={busy} onClick={() => { void onRefresh() }}>
+                {t('refresh')}
+              </button>
+            </div>
+            <div>
+              <p className="dshNewApiSettingsHint" style={{ margin: 0 }}>{t('popupUsageTitle')}</p>
+              <UsageBar used={snapshot.usage.quotaUsed} total={snapshot.usage.quotaTotal} />
+            </div>
+            <dl className="dshNewApiSettingsDl">
+              <dt>{t('usernameLabel')}</dt>
+              <dd>
                 {snapshot.user?.display_name ?? snapshot.user?.username ?? String(snapshot.user?.id ?? '--')}
                 {snapshot.user?.email !== undefined && snapshot.user.email !== '' ? ` <${snapshot.user.email}>` : ''}
               </dd>
               {config?.accessTokenMasked !== undefined && (
                 <>
-                  <dt style={{ color: 'var(--dsw-alias-label-secondary, inherit)' }}>{t('accessTokenLabel')}</dt>
-                  <dd style={{ margin: 0 }}>
+                  <dt>{t('accessTokenLabel')}</dt>
+                  <dd>
                     <code style={{ fontSize: 12 }}>{config.accessTokenMasked}</code>
                     <div style={{ color: 'var(--dsw-alias-label-tertiary, inherit)', fontSize: 12 }}>{t('accessTokenHint')}</div>
                   </dd>
                 </>
               )}
-              <dt style={{ color: 'var(--dsw-alias-label-secondary, inherit)' }}>{t('group')}</dt>
-              <dd style={{ margin: 0 }}>{snapshot.user?.group ?? '--'}</dd>
-              <dt style={{ color: 'var(--dsw-alias-label-secondary, inherit)' }}>{t('requests')}</dt>
-              <dd style={{ margin: 0 }}>{snapshot.user?.request_count ?? '--'}</dd>
-              <dt style={{ color: 'var(--dsw-alias-label-secondary, inherit)' }}>{t('quotaUsed')}</dt>
-              <dd style={{ margin: 0 }}>{money(snapshot.usage.quotaUsed, currency, exchangeRate)}</dd>
-              <dt style={{ color: 'var(--dsw-alias-label-secondary, inherit)' }}>{t('quotaRemaining')}</dt>
-              <dd style={{ margin: 0 }}>
+              <dt>{t('group')}</dt>
+              <dd>{snapshot.user?.group ?? '--'}</dd>
+              <dt>{t('requests')}</dt>
+              <dd>{snapshot.user?.request_count ?? '--'}</dd>
+              <dt>{t('quotaUsed')}</dt>
+              <dd>{money(snapshot.usage.quotaUsed, currency, exchangeRate)}</dd>
+              <dt>{t('quotaRemaining')}</dt>
+              <dd>
                 {snapshot.usage.unlimited === true ? t('unlimited') : money(snapshot.usage.quotaRemaining, currency, exchangeRate)}
               </dd>
-              <dt style={{ color: 'var(--dsw-alias-label-secondary, inherit)' }}>{t('quotaTotal')}</dt>
-              <dd style={{ margin: 0 }}>
+              <dt>{t('quotaTotal')}</dt>
+              <dd>
                 {snapshot.usage.unlimited === true ? t('unlimited') : money(snapshot.usage.quotaTotal, currency, exchangeRate)}
               </dd>
             </dl>
           </section>
 
           {/* API keys */}
-          <section style={cardStyle}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <h4 style={{ ...cardTitleStyle, flex: 1 }}>{t('tokens')}</h4>
-              <Button size="sm" disabled={busy} onClick={() => void onCreateToken()}>{t('createToken')}</Button>
+          <section className="dshNewApiSettingsGroup" aria-label={t('tokens')}>
+            <div className="dshNewApiSettingsActions">
+              <h3 style={{ margin: 0, flex: 1 }}>{t('tokens')}</h3>
+              <button type="button" className="dshNewApiSettingsButton" disabled={busy} onClick={() => { void onCreateToken() }}>
+                {t('createToken')}
+              </button>
             </div>
             {createdKey !== undefined && (
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8, padding: '6px 10px', border: '1px dashed var(--dsw-alias-label-tertiary, #888)', borderRadius: 8 }}>
-                <span style={{ fontSize: 12, color: 'var(--dsw-alias-label-secondary, inherit)' }}>{t('keyCreatedOnce', { name: createdKey.name })}</span>
-                <code style={{ fontFamily: 'monospace', fontSize: 13 }}>{createdKey.key}</code>
-                <Button size="sm" onClick={() => void onCopyKey(createdKey.key)}>{t('copyKey')}</Button>
+              <div className="dshNewApiSettingsKeyOnce">
+                <span>{t('keyCreatedOnce', { name: createdKey.name })}</span>
+                <code>{createdKey.key}</code>
+                <button type="button" className="dshNewApiSettingsButton" onClick={() => { void onCopyKey(createdKey.key) }}>
+                  {t('copyKey')}
+                </button>
               </div>
             )}
             {snapshot.tokens.length === 0
-              ? <p style={{ margin: 0, fontSize: 13, color: 'var(--dsw-alias-label-secondary, inherit)' }}>{t('noTokensHint')}</p>
+              ? <p className="dshNewApiSettingsHint">{t('noTokensHint')}</p>
               : (
-                <div style={{ overflowX: 'auto' }}>
-                  <table style={{ borderCollapse: 'collapse', fontSize: 13 }}>
+                <div className="dshNewApiSettingsTableWrap">
+                  <table className="dshNewApiSettingsTable">
                     <thead>
-                      <tr style={{ textAlign: 'left', color: 'var(--dsw-alias-label-tertiary, inherit)' }}>
-                        <th style={{ padding: '4px 12px 4px 0' }}>{t('tokenName')}</th>
-                        <th style={{ padding: 4 }}>{t('tokenKey')}</th>
-                        <th style={{ padding: 4 }}>{t('tokenQuota')}</th>
-                        <th style={{ padding: 4 }}>{t('tokenUsed')}</th>
-                        <th style={{ padding: 4 }}>{t('tokenExpires')}</th>
-                        <th style={{ padding: 4 }}>{t('tokenModels')}</th>
+                      <tr>
+                        <th>{t('tokenName')}</th>
+                        <th>{t('tokenKey')}</th>
+                        <th>{t('tokenQuota')}</th>
+                        <th>{t('tokenUsed')}</th>
+                        <th>{t('tokenExpires')}</th>
+                        <th>{t('tokenModels')}</th>
                       </tr>
                     </thead>
                     <tbody>
                       {snapshot.tokens.map((row) => (
                         <tr key={row.id}>
-                          <td style={{ padding: '4px 12px 4px 0' }}>{row.name ?? String(row.id)}</td>
-                          <td style={{ padding: 4 }}>
+                          <td>{row.name ?? String(row.id)}</td>
+                          <td>
                             {revealed[row.id] !== undefined
                               ? (
                                   <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
                                     <code style={{ fontFamily: 'monospace' }}>{revealed[row.id]}</code>
-                                    <Button size="sm" onClick={() => void onCopyKey(revealed[row.id])}>{t('copyKey')}</Button>
+                                    <button type="button" className="dshNewApiSettingsButton" onClick={() => { void onCopyKey(revealed[row.id]) }}>{t('copyKey')}</button>
                                   </span>
                                 )
                               : (
                                   <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
                                     <code style={{ fontFamily: 'monospace', color: 'var(--dsw-alias-label-secondary, inherit)' }}>••••{row.key !== undefined ? row.key.slice(-4) : '????'}</code>
-                                    <Button size="sm" disabled={busy} onClick={() => void onRevealKey(row.id)}>{t('revealKey')}</Button>
+                                    <button type="button" className="dshNewApiSettingsButton" disabled={busy} onClick={() => { void onRevealKey(row.id) }}>{t('revealKey')}</button>
                                   </span>
                                 )}
                           </td>
-                          <td style={{ padding: 4 }}>{formatQuota(row.quota, snapshot.server.quotaPerUnit, currency, exchangeRate)}</td>
-                          <td style={{ padding: 4 }}>{formatQuota(row.used_quota, snapshot.server.quotaPerUnit, currency, exchangeRate)}</td>
-                          <td style={{ padding: 4 }}>{formatDate(row.expired_time)}</td>
-                          <td style={{ padding: 4 }}>
+                          <td>{formatQuota(row.quota, snapshot.server.quotaPerUnit, currency, exchangeRate)}</td>
+                          <td>{formatQuota(row.used_quota, snapshot.server.quotaPerUnit, currency, exchangeRate)}</td>
+                          <td>{formatDate(row.expired_time)}</td>
+                          <td>
                             {row.models === undefined || row.models === '' || row.models === '-1' || row.models === '*' ? t('tokenAllModels') : row.models}
                           </td>
                         </tr>
@@ -1529,21 +1856,21 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
           </section>
 
           {/* Model catalog + sync */}
-          <section style={cardStyle}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <h4 style={{ ...cardTitleStyle, flex: 1 }}>{t('models')}</h4>
+          <section className="dshNewApiSettingsGroup" aria-label={t('models')}>
+            <div className="dshNewApiSettingsActions">
+              <h3 style={{ margin: 0, flex: 1 }}>{t('models')}</h3>
               <Pill>{t('modelsCount', { count: models.length })}</Pill>
             </div>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ borderCollapse: 'collapse', fontSize: 13 }}>
+            <div className="dshNewApiSettingsTableWrap">
+              <table className="dshNewApiSettingsTable">
                 <thead>
-                  <tr style={{ textAlign: 'left', color: 'var(--dsw-alias-label-tertiary, inherit)' }}>
-                    <th style={{ padding: '4px 12px 4px 0' }}>{t('modelId')}</th>
-                    <th style={{ padding: 4 }}>{t('modelInput')}</th>
-                    <th style={{ padding: 4 }}>{t('modelOutput')}</th>
-                    <th style={{ padding: 4 }}>{t('modelLimits')}</th>
-                    <th style={{ padding: 4 }}>{t('modelImage')}</th>
-                    <th style={{ padding: 4 }} />
+                  <tr>
+                    <th>{t('modelId')}</th>
+                    <th>{t('modelInput')}</th>
+                    <th>{t('modelOutput')}</th>
+                    <th>{t('modelLimits')}</th>
+                    <th>{t('modelImage')}</th>
+                    <th />
                   </tr>
                 </thead>
                 <tbody>
@@ -1552,14 +1879,15 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
                     const editingThis = editing?.id === model.id
                     return (
                       <tr key={model.id}>
-                        <td style={{ padding: '4px 12px 4px 0', fontFamily: 'monospace' }}>{model.id}</td>
-                        <td style={{ padding: 4 }}>{model.priced === true ? formatPrice(model.inputPrice, currency, exchangeRate) : '--'}</td>
-                        <td style={{ padding: 4 }}>{model.priced === true ? formatPrice(model.outputPrice, currency, exchangeRate) : '--'}</td>
-                        <td style={{ padding: '4px 8px 4px 4px', whiteSpace: 'nowrap' }}>
+                        <td style={{ fontFamily: 'monospace' }}>{model.id}</td>
+                        <td>{model.priced === true ? formatPrice(model.inputPrice, currency, exchangeRate) : '--'}</td>
+                        <td>{model.priced === true ? formatPrice(model.outputPrice, currency, exchangeRate) : '--'}</td>
+                        <td style={{ whiteSpace: 'nowrap' }}>
                           {editingThis && editing !== undefined
                             ? (
                                 <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-                                  <Input
+                                  <input
+                                    className="dshNewApiSettingsInput"
                                     value={editing.contextWindow}
                                     placeholder={t('contextWindow')}
                                     title={t('contextWindow')}
@@ -1569,7 +1897,8 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
                                     spellCheck={false}
                                   />
                                   <span style={{ color: 'var(--dsw-alias-label-tertiary, inherit)' }}>/</span>
-                                  <Input
+                                  <input
+                                    className="dshNewApiSettingsInput"
                                     value={editing.maxTokens}
                                     placeholder={t('maxOutputTokens')}
                                     title={t('maxOutputTokens')}
@@ -1598,7 +1927,7 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
                                 )
                               : `${storedLimit.contextWindow !== undefined ? String(storedLimit.contextWindow) : '?'} / ${storedLimit.maxTokens !== undefined ? String(storedLimit.maxTokens) : '?'}`}
                         </td>
-                        <td style={{ padding: 4, whiteSpace: 'nowrap' }}>
+                        <td style={{ whiteSpace: 'nowrap' }}>
                           {editingThis && editing !== undefined
                             ? (
                                 <label title={t('modelImage')} style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}>
@@ -1618,23 +1947,30 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
                                 </span>
                               )}
                         </td>
-                        <td style={{ padding: 4, whiteSpace: 'nowrap' }}>
+                        <td style={{ whiteSpace: 'nowrap' }}>
                           {editingThis
                             ? (
                                 <span style={{ display: 'inline-flex', gap: 6 }}>
-                                  <Button size="sm" variant="primary" disabled={busy} onClick={() => void onSaveLimit()}>{t('saveLimit')}</Button>
-                                  <Button size="sm" disabled={busy} onClick={() => setEditing(undefined)}>{t('cancelLimit')}</Button>
+                                  <button type="button" className="dshNewApiSettingsButton" disabled={busy} onClick={() => { void onSaveLimit() }}>{t('saveLimit')}</button>
+                                  <button type="button" className="dshNewApiSettingsButton dshNewApiSettingsButtonSecondary" disabled={busy} onClick={() => { setEditing(undefined) }}>{t('cancelLimit')}</button>
                                 </span>
                               )
                             : (
-                                <Button size="sm" disabled={busy} onClick={() => {
-                                  setEditing({
-                                    id: model.id,
-                                    contextWindow: storedLimit?.contextWindow !== undefined ? String(storedLimit.contextWindow) : '',
-                                    maxTokens: storedLimit?.maxTokens !== undefined ? String(storedLimit.maxTokens) : '',
-                                    image: storedLimit?.image !== false,
-                                  })
-                                }}>{t('editLimit')}</Button>
+                                <button
+                                  type="button"
+                                  className="dshNewApiSettingsButton"
+                                  disabled={busy}
+                                  onClick={() => {
+                                    setEditing({
+                                      id: model.id,
+                                      contextWindow: storedLimit?.contextWindow !== undefined ? String(storedLimit.contextWindow) : '',
+                                      maxTokens: storedLimit?.maxTokens !== undefined ? String(storedLimit.maxTokens) : '',
+                                      image: storedLimit?.image !== false,
+                                    })
+                                  }}
+                                >
+                                  {t('editLimit')}
+                                </button>
                               )}
                         </td>
                       </tr>
@@ -1643,18 +1979,23 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
                 </tbody>
               </table>
             </div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <Button variant="primary" size="sm" disabled={syncing || models.length === 0} onClick={() => void onSync()}>
+            <div className="dshNewApiSettingsForm">
+              <button type="button" className="dshNewApiSettingsButton" disabled={syncing || models.length === 0} onClick={() => { void onSync() }}>
                 {syncing ? t('syncing') : t('sync')}
-              </Button>
-              <Input
-                value={syncLimit}
-                placeholder={t('syncLimit')}
-                onChange={(event: ChangeEvent<HTMLInputElement>) => setSyncLimit(event.target.value)}
-                style={{ width: 140 }}
-                inputMode="numeric"
-              />
+              </button>
+              <label className="dshNewApiSettingsField dshNewApiSettingsFieldNarrow">
+                {t('syncLimit')}
+                <input
+                  className="dshNewApiSettingsInput"
+                  value={syncLimit}
+                  placeholder={t('syncLimit')}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) => setSyncLimit(event.target.value)}
+                  style={{ width: 140 }}
+                  inputMode="numeric"
+                />
+              </label>
             </div>
+            <p className="dshNewApiSettingsHint">{t('limitHint')}</p>
           </section>
         </>
       )}
