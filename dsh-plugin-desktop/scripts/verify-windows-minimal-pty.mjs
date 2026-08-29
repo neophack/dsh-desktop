@@ -82,8 +82,15 @@ async function scenario(inputs) {
     // A Node worker models the Electron Host by asking the official sandbox
     // provider to emit the same Electron + runner prefix used in production.
     context.sandbox.internals.windowsAclRunnerArgs = [inputs.electron, inputs.runner]
+    // workspace-write, not read-only: under the read-only restricted token
+    // Windows PowerShell (5.1 and 7 alike) force ConstrainedLanguage mode,
+    // where the terminal-bash readiness preamble ([System.Text.UTF8Encoding]::
+    // new(...) and the [Console]::OutputEncoding assignment) is rejected, so
+    // readiness can never arrive. Upstream documents workspace-write as
+    // FullLanguage under the ACL sandbox, and the relay/trampoline/ConPTY
+    // chain under test is identical in both modes.
     await context.plugin(SandboxPolicyService, {
-      mode: 'read-only',
+      mode: 'workspace-write',
       workspaceRoot: inputs.packageRoot,
     })
 
