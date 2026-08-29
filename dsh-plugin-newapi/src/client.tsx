@@ -228,7 +228,7 @@ const SETTINGS_CSS = `
 .dshNewApiSettings {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 18px;
   width: min(100%, 880px);
   padding: 2px 0 36px;
   color: var(--dsw-alias-label-primary);
@@ -248,8 +248,8 @@ const SETTINGS_CSS = `
 .dshNewApiSettingsGroup {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding-top: 28px;
+  gap: 12px;
+  padding-top: 20px;
   border-top: 1px solid var(--dsw-alias-border-l1);
 }
 .dshNewApiSettingsForm {
@@ -258,6 +258,45 @@ const SETTINGS_CSS = `
   gap: 10px;
   flex-wrap: wrap;
 }
+/* Flat card that groups every field persisted by one "Save settings" press,
+   so the save scope is visually unambiguous. */
+.dshNewApiSettingsCard {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-1);
+}
+.dshNewApiSettingsRow2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.dshNewApiSettingsCardFooter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 12px;
+  border-top: 1px dashed var(--dsw-alias-border-l1);
+}
+.dshNewApiSettingsSave {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 5px 16px;
+  border: none;
+  border-radius: 999px;
+  background: var(--dsw-alias-brand-primary, var(--dsw-alias-button-primary-fill, #4a6cf7));
+  color: var(--dsw-alias-label-primary-foreground, #fff);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+}
+.dshNewApiSettingsSave:hover:not(:disabled) { filter: brightness(1.06); }
+.dshNewApiSettingsSave:disabled { cursor: default; opacity: .55; }
 .dshNewApiSettingsField {
   display: flex;
   flex: 1;
@@ -427,6 +466,7 @@ const SETTINGS_CSS = `
 .dshNewApiSettingsKeyOnce code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; color: var(--dsw-alias-label-primary); }
 @media (max-width: 720px) {
   .dshNewApiSettingsForm { align-items: stretch; flex-direction: column; }
+  .dshNewApiSettingsRow2 { grid-template-columns: 1fr; }
   .dshNewApiSettingsToggleRow { align-items: flex-start; }
 }
 `
@@ -496,6 +536,7 @@ const zh: Record<string, string> = {
   defaultContextWindowLabel: '默认上下文',
   defaultContextWindowHint: '所有未单独设置的模型默认 131072 (128k) tokens; 填 0 关闭, 保存后需重新同步模型生效。',
   saveSettings: '保存设置',
+  saveScopeHint: '「保存设置」会一并应用本卡片内的全部字段: 服务器地址、币种、默认上下文与登录方式。',
   settingsSaved: '设置已保存。',
   loadFailed: '加载配置失败, 请重试。',
   probe: '检测服务器',
@@ -543,7 +584,6 @@ const zh: Record<string, string> = {
   noTokens: '没有可用的令牌。请在 NewAPI 控制台创建。',
   noTokensHint: '没有可用的令牌, 点击右上角「创建密钥」直接新建一个。',
   createToken: '创建密钥',
-  revealKey: '显示',
   copyKey: '复制',
   keyCreatedOnce: '新密钥「{name}」已创建, 完整密钥仅此一次显示:',
   keyCopied: '密钥已复制到剪贴板。',
@@ -596,6 +636,7 @@ const en: Record<string, string> = {
   defaultContextWindowLabel: 'Default context',
   defaultContextWindowHint: 'Every model without explicit limits defaults to 131072 (128k) tokens; 0 disables. Save, then re-sync models to apply.',
   saveSettings: 'Save settings',
+  saveScopeHint: '"Save settings" applies every field in this card at once: server URL, currency, default context, and sign-in mode.',
   settingsSaved: 'Settings saved.',
   loadFailed: 'Failed to load settings; please retry.',
   probe: 'Probe server',
@@ -643,7 +684,6 @@ const en: Record<string, string> = {
   noTokens: 'No tokens. Create one in the NewAPI console.',
   noTokensHint: 'No tokens yet — click "Create key" above to make one right here.',
   createToken: 'Create key',
-  revealKey: 'Reveal',
   copyKey: 'Copy',
   keyCreatedOnce: 'Key "{name}" created — shown only once:',
   keyCopied: 'Key copied to clipboard.',
@@ -1458,8 +1498,6 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
   /** Inline per-model limit editor ({ id } plus raw input strings and the image toggle). */
   const [editing, setEditing] = useState<{ id: string, contextWindow: string, maxTokens: string, image: boolean } | undefined>(undefined)
   const limits = config?.modelLimits ?? {}
-  /** Full keys revealed on demand, keyed by token id. */
-  const [revealed, setRevealed] = useState<Record<number, string>>({})
   /** A freshly created key, shown once with a copy affordance. */
   const [createdKey, setCreatedKey] = useState<{ name: string, key: string } | undefined>(undefined)
 
@@ -1485,13 +1523,6 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
     setMessage(t('limitSaved', { model: editing.id }))
     setEditing(undefined)
     await loadConfig()
-  }
-
-  const onRevealKey = async (id: number): Promise<void> => {
-    if (revealed[id] !== undefined) return
-    const result = await call<{ id: number, key: string }>('tokens.revealKey', { id })
-    if (result.ok && result.value.key !== '') setRevealed((prev) => ({ ...prev, [id]: result.value.key }))
-    else if (!result.ok) setError(result.error.message)
   }
 
   const onCreateToken = async (): Promise<void> => {
@@ -1578,8 +1609,15 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
             )
           : (
               <>
+                {/*
+                  * One card = one save scope. Everything persisted by a single
+                  * "Save settings" press (server URL, currency, default context
+                  * window, password-login switch) lives inside this one form
+                  * card, with the save button anchored in the card footer and
+                  * a hint naming exactly which fields it applies to.
+                  */}
                 <form
-                  className="dshNewApiSettingsForm"
+                  className="dshNewApiSettingsCard"
                   onSubmit={(event) => {
                     event.preventDefault()
                     void onSaveSettings()
@@ -1587,71 +1625,73 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
                 >
                   <label className="dshNewApiSettingsField">
                     <span aria-hidden="true">{t('baseUrl')}</span>
-                    <input
-                      className="dshNewApiSettingsInput"
-                      value={baseUrl}
-                      placeholder={config.baseUrlDefault !== '' ? config.baseUrlDefault : t('baseUrlPlaceholder')}
-                      onChange={(event: ChangeEvent<HTMLInputElement>) => setBaseUrl(event.target.value)}
-                      spellCheck={false}
-                      autoComplete="off"
-                    />
-                  </label>
-                  <button type="submit" className="dshNewApiSettingsButton" disabled={busy}>
-                    {t('saveSettings')}
-                  </button>
-                  <button
-                    type="button"
-                    className="dshNewApiSettingsButton dshNewApiSettingsButtonSecondary"
-                    disabled={busy || baseUrl.trim() === ''}
-                    onClick={() => { void onProbe() }}
-                  >
-                    {busy ? t('probing') : t('probe')}
-                  </button>
-                </form>
-                <SettingsToggleRow
-                  label={t('enablePasswordLogin')}
-                  checked={passwordLoginOn}
-                  disabled={busy}
-                  onChange={setPasswordLoginOn}
-                />
-                <form className="dshNewApiSettingsForm">
-                  <label className="dshNewApiSettingsField dshNewApiSettingsFieldNarrow">
-                    {t('currencyLabel')}
-                    <select
-                      className="dshNewApiSettingsInput"
-                      value={currency}
-                      onChange={(event: ChangeEvent<HTMLSelectElement>) => {
-                        const next = event.target.value
-                        setCurrency(next === 'usd' ? 'usd' : 'cny')
-                      }}
-                    >
-                      <option value="cny">{t('currencyCny')}</option>
-                      <option value="usd">{t('currencyUsd')}</option>
-                    </select>
-                  </label>
-                  <label className="dshNewApiSettingsField dshNewApiSettingsFieldNarrow">
-                    {t('defaultContextWindowLabel')}
-                    <input
-                      className="dshNewApiSettingsInput"
-                      value={defaultContextWindow}
-                      placeholder="131072"
-                      onChange={(event: ChangeEvent<HTMLInputElement>) => setDefaultContextWindow(event.target.value)}
-                      style={{ width: 110 }}
-                      inputMode="numeric"
-                      spellCheck={false}
-                    />
-                  </label>
-                </form>
-                <p className="dshNewApiSettingsHint">{t('defaultContextWindowHint')}</p>
-                {server !== undefined && (
-                  <p className="dshNewApiSettingsNotice">
-                    <span className="dshNewApiSettingsStatus">
-                      <StateDot state="done" />
-                      <span>{server.systemName} {server.version !== '' ? `(${server.version})` : ''}</span>
-                      {oauthProviders.map((provider) => <Pill key={provider.slug}>{provider.name}</Pill>)}
+                    <span className="dshNewApiSettingsForm" style={{ flexWrap: 'nowrap' }}>
+                      <input
+                        className="dshNewApiSettingsInput"
+                        value={baseUrl}
+                        placeholder={config.baseUrlDefault !== '' ? config.baseUrlDefault : t('baseUrlPlaceholder')}
+                        onChange={(event: ChangeEvent<HTMLInputElement>) => setBaseUrl(event.target.value)}
+                        spellCheck={false}
+                        autoComplete="off"
+                      />
+                      <button
+                        type="button"
+                        className="dshNewApiSettingsButton dshNewApiSettingsButtonSecondary"
+                        disabled={busy || baseUrl.trim() === ''}
+                        onClick={() => { void onProbe() }}
+                      >
+                        {busy ? t('probing') : t('probe')}
+                      </button>
                     </span>
-                  </p>
-                )}
+                  </label>
+                  <div className="dshNewApiSettingsRow2">
+                    <label className="dshNewApiSettingsField">
+                      {t('currencyLabel')}
+                      <select
+                        className="dshNewApiSettingsInput"
+                        value={currency}
+                        onChange={(event: ChangeEvent<HTMLSelectElement>) => {
+                          const next = event.target.value
+                          setCurrency(next === 'usd' ? 'usd' : 'cny')
+                        }}
+                      >
+                        <option value="cny">{t('currencyCny')}</option>
+                        <option value="usd">{t('currencyUsd')}</option>
+                      </select>
+                    </label>
+                    <label className="dshNewApiSettingsField">
+                      {t('defaultContextWindowLabel')}
+                      <input
+                        className="dshNewApiSettingsInput"
+                        value={defaultContextWindow}
+                        placeholder="131072"
+                        onChange={(event: ChangeEvent<HTMLInputElement>) => setDefaultContextWindow(event.target.value)}
+                        inputMode="numeric"
+                        spellCheck={false}
+                      />
+                    </label>
+                  </div>
+                  <SettingsToggleRow
+                    label={t('enablePasswordLogin')}
+                    checked={passwordLoginOn}
+                    disabled={busy}
+                    onChange={setPasswordLoginOn}
+                  />
+                  <div className="dshNewApiSettingsCardFooter">
+                    <button type="submit" className="dshNewApiSettingsSave" disabled={busy}>
+                      {t('saveSettings')}
+                    </button>
+                    <span className="dshNewApiSettingsHint" style={{ margin: 0, flex: 1, minWidth: 200 }}>{t('saveScopeHint')}</span>
+                    {server !== undefined && (
+                      <span className="dshNewApiSettingsStatus">
+                        <StateDot state="done" />
+                        <span>{server.systemName} {server.version !== '' ? `(${server.version})` : ''}</span>
+                        {oauthProviders.map((provider) => <Pill key={provider.slug}>{provider.name}</Pill>)}
+                      </span>
+                    )}
+                  </div>
+                  <p className="dshNewApiSettingsHint" style={{ margin: 0 }}>{t('defaultContextWindowHint')}</p>
+                </form>
               </>
             )}
       </section>
@@ -1827,19 +1867,7 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
                         <tr key={row.id}>
                           <td>{row.name ?? String(row.id)}</td>
                           <td>
-                            {revealed[row.id] !== undefined
-                              ? (
-                                  <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-                                    <code style={{ fontFamily: 'monospace' }}>{revealed[row.id]}</code>
-                                    <button type="button" className="dshNewApiSettingsButton" onClick={() => { void onCopyKey(revealed[row.id]) }}>{t('copyKey')}</button>
-                                  </span>
-                                )
-                              : (
-                                  <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-                                    <code style={{ fontFamily: 'monospace', color: 'var(--dsw-alias-label-secondary, inherit)' }}>••••{row.key !== undefined ? row.key.slice(-4) : '????'}</code>
-                                    <button type="button" className="dshNewApiSettingsButton" disabled={busy} onClick={() => { void onRevealKey(row.id) }}>{t('revealKey')}</button>
-                                  </span>
-                                )}
+                            <code style={{ fontFamily: 'monospace', color: 'var(--dsw-alias-label-secondary, inherit)' }}>••••{row.key !== undefined ? row.key.slice(-4) : '????'}</code>
                           </td>
                           <td>{formatQuota(row.quota, snapshot.server.quotaPerUnit, currency, exchangeRate)}</td>
                           <td>{formatQuota(row.used_quota, snapshot.server.quotaPerUnit, currency, exchangeRate)}</td>
