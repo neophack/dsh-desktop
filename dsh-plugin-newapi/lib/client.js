@@ -93,7 +93,7 @@ var SETTINGS_CSS = `
 .dshNewApiSettings {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 18px;
   width: min(100%, 880px);
   padding: 2px 0 36px;
   color: var(--dsw-alias-label-primary);
@@ -113,8 +113,8 @@ var SETTINGS_CSS = `
 .dshNewApiSettingsGroup {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding-top: 28px;
+  gap: 12px;
+  padding-top: 20px;
   border-top: 1px solid var(--dsw-alias-border-l1);
 }
 .dshNewApiSettingsForm {
@@ -123,6 +123,45 @@ var SETTINGS_CSS = `
   gap: 10px;
   flex-wrap: wrap;
 }
+/* Flat card that groups every field persisted by one "Save settings" press,
+   so the save scope is visually unambiguous. */
+.dshNewApiSettingsCard {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-1);
+}
+.dshNewApiSettingsRow2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.dshNewApiSettingsCardFooter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 12px;
+  border-top: 1px dashed var(--dsw-alias-border-l1);
+}
+.dshNewApiSettingsSave {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 5px 16px;
+  border: none;
+  border-radius: 999px;
+  background: var(--dsw-alias-brand-primary, var(--dsw-alias-button-primary-fill, #4a6cf7));
+  color: var(--dsw-alias-label-primary-foreground, #fff);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+}
+.dshNewApiSettingsSave:hover:not(:disabled) { filter: brightness(1.06); }
+.dshNewApiSettingsSave:disabled { cursor: default; opacity: .55; }
 .dshNewApiSettingsField {
   display: flex;
   flex: 1;
@@ -292,6 +331,7 @@ var SETTINGS_CSS = `
 .dshNewApiSettingsKeyOnce code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; color: var(--dsw-alias-label-primary); }
 @media (max-width: 720px) {
   .dshNewApiSettingsForm { align-items: stretch; flex-direction: column; }
+  .dshNewApiSettingsRow2 { grid-template-columns: 1fr; }
   .dshNewApiSettingsToggleRow { align-items: flex-start; }
 }
 `;
@@ -352,6 +392,7 @@ var zh = {
   defaultContextWindowLabel: "\u9ED8\u8BA4\u4E0A\u4E0B\u6587",
   defaultContextWindowHint: "\u6240\u6709\u672A\u5355\u72EC\u8BBE\u7F6E\u7684\u6A21\u578B\u9ED8\u8BA4 131072 (128k) tokens; \u586B 0 \u5173\u95ED, \u4FDD\u5B58\u540E\u9700\u91CD\u65B0\u540C\u6B65\u6A21\u578B\u751F\u6548\u3002",
   saveSettings: "\u4FDD\u5B58\u8BBE\u7F6E",
+  saveScopeHint: "\u300C\u4FDD\u5B58\u8BBE\u7F6E\u300D\u4F1A\u4E00\u5E76\u5E94\u7528\u672C\u5361\u7247\u5185\u7684\u5168\u90E8\u5B57\u6BB5: \u670D\u52A1\u5668\u5730\u5740\u3001\u5E01\u79CD\u3001\u9ED8\u8BA4\u4E0A\u4E0B\u6587\u4E0E\u767B\u5F55\u65B9\u5F0F\u3002",
   settingsSaved: "\u8BBE\u7F6E\u5DF2\u4FDD\u5B58\u3002",
   loadFailed: "\u52A0\u8F7D\u914D\u7F6E\u5931\u8D25, \u8BF7\u91CD\u8BD5\u3002",
   probe: "\u68C0\u6D4B\u670D\u52A1\u5668",
@@ -452,6 +493,7 @@ var en = {
   defaultContextWindowLabel: "Default context",
   defaultContextWindowHint: "Every model without explicit limits defaults to 131072 (128k) tokens; 0 disables. Save, then re-sync models to apply.",
   saveSettings: "Save settings",
+  saveScopeHint: '"Save settings" applies every field in this card at once: server URL, currency, default context, and sign-in mode.',
   settingsSaved: "Settings saved.",
   loadFailed: "Failed to load settings; please retry.",
   probe: "Probe server",
@@ -1316,18 +1358,18 @@ function NewApiSettings(props) {
         configLoaded && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dshNewApiSettingsButton", disabled: busy, onClick: () => {
           void loadConfig();
         }, children: t("refresh") })
-      ] }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
-          "form",
-          {
-            className: "dshNewApiSettingsForm",
-            onSubmit: (event) => {
-              event.preventDefault();
-              void onSaveSettings();
-            },
-            children: [
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { className: "dshNewApiSettingsField", children: [
-                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { "aria-hidden": "true", children: t("baseUrl") }),
+      ] }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_jsx_runtime2.Fragment, { children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
+        "form",
+        {
+          className: "dshNewApiSettingsCard",
+          onSubmit: (event) => {
+            event.preventDefault();
+            void onSaveSettings();
+          },
+          children: [
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { className: "dshNewApiSettingsField", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { "aria-hidden": "true", children: t("baseUrl") }),
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "dshNewApiSettingsForm", style: { flexWrap: "nowrap" }, children: [
                 /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
                   "input",
                   {
@@ -1338,79 +1380,81 @@ function NewApiSettings(props) {
                     spellCheck: false,
                     autoComplete: "off"
                   }
+                ),
+                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+                  "button",
+                  {
+                    type: "button",
+                    className: "dshNewApiSettingsButton dshNewApiSettingsButtonSecondary",
+                    disabled: busy || baseUrl.trim() === "",
+                    onClick: () => {
+                      void onProbe();
+                    },
+                    children: busy ? t("probing") : t("probe")
+                  }
+                )
+              ] })
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshNewApiSettingsRow2", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { className: "dshNewApiSettingsField", children: [
+                t("currencyLabel"),
+                /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
+                  "select",
+                  {
+                    className: "dshNewApiSettingsInput",
+                    value: currency,
+                    onChange: (event) => {
+                      const next = event.target.value;
+                      setCurrency(next === "usd" ? "usd" : "cny");
+                    },
+                    children: [
+                      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: "cny", children: t("currencyCny") }),
+                      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: "usd", children: t("currencyUsd") })
+                    ]
+                  }
                 )
               ] }),
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "submit", className: "dshNewApiSettingsButton", disabled: busy, children: t("saveSettings") }),
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-                "button",
-                {
-                  type: "button",
-                  className: "dshNewApiSettingsButton dshNewApiSettingsButtonSecondary",
-                  disabled: busy || baseUrl.trim() === "",
-                  onClick: () => {
-                    void onProbe();
-                  },
-                  children: busy ? t("probing") : t("probe")
-                }
-              )
-            ]
-          }
-        ),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-          SettingsToggleRow,
-          {
-            label: t("enablePasswordLogin"),
-            checked: passwordLoginOn,
-            disabled: busy,
-            onChange: setPasswordLoginOn
-          }
-        ),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("form", { className: "dshNewApiSettingsForm", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { className: "dshNewApiSettingsField dshNewApiSettingsFieldNarrow", children: [
-            t("currencyLabel"),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
-              "select",
-              {
-                className: "dshNewApiSettingsInput",
-                value: currency,
-                onChange: (event) => {
-                  const next = event.target.value;
-                  setCurrency(next === "usd" ? "usd" : "cny");
-                },
-                children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: "cny", children: t("currencyCny") }),
-                  /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: "usd", children: t("currencyUsd") })
-                ]
-              }
-            )
-          ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { className: "dshNewApiSettingsField dshNewApiSettingsFieldNarrow", children: [
-            t("defaultContextWindowLabel"),
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { className: "dshNewApiSettingsField", children: [
+                t("defaultContextWindowLabel"),
+                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+                  "input",
+                  {
+                    className: "dshNewApiSettingsInput",
+                    value: defaultContextWindow,
+                    placeholder: "131072",
+                    onChange: (event) => setDefaultContextWindow(event.target.value),
+                    inputMode: "numeric",
+                    spellCheck: false
+                  }
+                )
+              ] })
+            ] }),
             /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-              "input",
+              SettingsToggleRow,
               {
-                className: "dshNewApiSettingsInput",
-                value: defaultContextWindow,
-                placeholder: "131072",
-                onChange: (event) => setDefaultContextWindow(event.target.value),
-                style: { width: 110 },
-                inputMode: "numeric",
-                spellCheck: false
+                label: t("enablePasswordLogin"),
+                checked: passwordLoginOn,
+                disabled: busy,
+                onChange: setPasswordLoginOn
               }
-            )
-          ] })
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dshNewApiSettingsHint", children: t("defaultContextWindowHint") }),
-        server !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dshNewApiSettingsNotice", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "dshNewApiSettingsStatus", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.StateDot, { state: "done" }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { children: [
-            server.systemName,
-            " ",
-            server.version !== "" ? `(${server.version})` : ""
-          ] }),
-          oauthProviders.map((provider) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Pill, { children: provider.name }, provider.slug))
-        ] }) })
-      ] })
+            ),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshNewApiSettingsCardFooter", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "submit", className: "dshNewApiSettingsSave", disabled: busy, children: t("saveSettings") }),
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshNewApiSettingsHint", style: { margin: 0, flex: 1, minWidth: 200 }, children: t("saveScopeHint") }),
+              server !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "dshNewApiSettingsStatus", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.StateDot, { state: "done" }),
+                /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { children: [
+                  server.systemName,
+                  " ",
+                  server.version !== "" ? `(${server.version})` : ""
+                ] }),
+                oauthProviders.map((provider) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Pill, { children: provider.name }, provider.slug))
+              ] })
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dshNewApiSettingsHint", style: { margin: 0 }, children: t("defaultContextWindowHint") })
+          ]
+        }
+      ) })
     ] }),
     /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { className: "dshNewApiSettingsGroup", "aria-label": t("login"), children: [
       /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h3", { children: t("login") }) }),
