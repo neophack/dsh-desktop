@@ -58,7 +58,7 @@ function capture(
     appVersion: desktopVersion,
     desktopPackageName: release.identity.packageName,
     releaseChannel: release.identity.releaseChannel,
-    dshVersion: release.identity.releaseChannel === 'stable' ? '0.1.1-rc.2' : '0.1.2-alpha.5',
+    dshVersion: '0.1.2-rc.1',
     now: () => Date.parse(recordedAt),
   })
   const result = checkpoint.captureHealthy()
@@ -73,7 +73,7 @@ async function recordSetup(
 ): Promise<void> {
   await completeOrSkipDesktopSetupWizard(release.userDataDir, target.profile, 'completed', {
     desktopVersion: release.identity.releaseChannel === 'stable' ? '2.0.4' : '2.0.5-beta.2',
-    dshVersion: release.identity.releaseChannel === 'stable' ? '0.1.1-rc.2' : '0.1.2-alpha.5',
+    dshVersion: '0.1.2-rc.1',
     setupRevision: 1,
   }, recordedAt)
 }

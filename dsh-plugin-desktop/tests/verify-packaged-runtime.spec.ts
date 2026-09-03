@@ -47,8 +47,8 @@ function completePackageResolver(unpackedRoot: string): PackageResolver {
 describe('packaged desktop runtime verification', () => {
   it('tracks every generated DSH CLI chunk without pinning one release hash', () => {
     expect(REQUIRED_DSH_CLI_RUNTIME_ENTRIES).toContain('node_modules/@deepseek-ai/dsh/lib/bin.js')
-    expect(REQUIRED_DSH_CLI_RUNTIME_ENTRIES).toContain('node_modules/@deepseek-ai/dsh/lib/plugin-9h8shc4d.js')
-    expect(REQUIRED_DSH_CLI_RUNTIME_ENTRIES).not.toContain('node_modules/@deepseek-ai/dsh/lib/plugin-F7ZVfRyo.js')
+    expect(REQUIRED_DSH_CLI_RUNTIME_ENTRIES).toContain('node_modules/@deepseek-ai/dsh/lib/plugin-F7ZVfRyo.js')
+    expect(REQUIRED_DSH_CLI_RUNTIME_ENTRIES).not.toContain('node_modules/@deepseek-ai/dsh/lib/plugin-9h8shc4d.js')
   })
 
   it('fails the diagnostic Worker smoke when its archive omits the crash dump', async () => {
@@ -237,7 +237,7 @@ describe('packaged desktop runtime verification', () => {
     'lib/diagnostic-export-worker.js',
     'lib/update-download.js',
     'node_modules/@deepseek-ai/dsh/lib/bin.js',
-    'node_modules/@deepseek-ai/dsh/lib/plugin-9h8shc4d.js',
+    'node_modules/@deepseek-ai/dsh/lib/plugin-F7ZVfRyo.js',
     'node_modules/@deepseek-ai/dsh-subprocess-local/lib/index.js',
     'node_modules/open/index.js',
     'node_modules/pnpm/bin/pnpm.mjs',
@@ -259,9 +259,9 @@ describe('packaged desktop runtime verification', () => {
     const runtimeContext = context('/build', 'win32')
     const unpackedRoot = resolvePackagedUnpackedRoot(runtimeContext)
     const requiredPresetEntries = [
-      'node_modules/@deepseek-ai/dsh/config/agent-presets/cordis/agent.cordis.yml',
-      'node_modules/@deepseek-ai/dsh/config/agent-presets/cordis/skills/cordis-plugin-development/SKILL.md',
-      'node_modules/@deepseek-ai/dsh/config/agent-presets/cordis/skills/editing-cordis-compositions/SKILL.md',
+      'node_modules/@deepseek-ai/dsh-agent-presets/presets/cordis/agent.cordis.yml',
+      'node_modules/@deepseek-ai/dsh-agent-presets/presets/cordis/skills/cordis-plugin-development/SKILL.md',
+      'node_modules/@deepseek-ai/dsh-agent-presets/presets/cordis/skills/editing-cordis-compositions/SKILL.md',
     ]
 
     for (const missing of requiredPresetEntries) {

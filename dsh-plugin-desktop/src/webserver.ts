@@ -8,10 +8,7 @@ import WebServer, {
   type WebRoute,
   type WebUpgradeRoute,
 } from '@deepseek-ai/dsh-host-webserver'
-import {
-  authorizeDesktopBrowserIndex,
-  decideDesktopBrowserAccess,
-} from './desktop-browser-access.ts'
+import { decideDesktopBrowserAccess } from './desktop-browser-access.ts'
 import { DESKTOP_WEB_PORT_RETRY_LIMIT } from './desktop-port.ts'
 
 function isAddressInUse(cause: unknown): boolean {
@@ -81,8 +78,6 @@ export class DesktopWebServer extends WebServer {
 
   override registerFallback(handler: WebRoute['handler']): () => void {
     return super.registerFallback(async (req, res) => {
-      const access = this.ctx.get('desktopBrowserAccess')
-      if (access !== undefined && authorizeDesktopBrowserIndex(access, req, res)) return
       if (!this.permits(req)) return rejectBrowserRequest(res)
       await handler(req, res)
     })

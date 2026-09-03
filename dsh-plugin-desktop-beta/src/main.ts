@@ -176,6 +176,7 @@ import {
   DESKTOP_SAFE_MODE_PROFILE_NAME,
   ensureDesktopSafeModeEnvironment,
   resetDesktopSafeModeEnvironment,
+  desktopSafeModePaths,
   type DesktopSafeModePaths,
 } from './safe-mode.ts'
 import {
@@ -407,6 +408,8 @@ async function start(): Promise<void> {
   })
   const recoveryModeRequested = desktopRecoveryModeRequested()
   const safeModeRequested = desktopSafeModeRequested()
+  const inheritedDshHome = process.env.DSH_HOME
+  const safeModeHomeDir = desktopSafeModePaths(desktopUserDataDir).homeDir
   try {
     logSink = new LogFileSink(join(app.getPath('userData'), 'logs'), {
       maxFileBytes: 10 * 1024 * 1024,
@@ -424,6 +427,7 @@ async function start(): Promise<void> {
   if (safeModeRequested) {
     safeModePaths = ensureDesktopSafeModeEnvironment(desktopUserDataDir)
   } else {
+    if (process.env.DSH_HOME === safeModeHomeDir) delete process.env.DSH_HOME
     try {
       cleanupDesktopSafeModeEnvironment(desktopUserDataDir)
     } catch (cause) {
@@ -482,6 +486,15 @@ async function start(): Promise<void> {
       removeShutdownRequests?.()
       removeUncaughtExceptionLogging?.()
       removeChildProcessLogging?.()
+      if (safeModePaths !== undefined) {
+        if (inheritedDshHome === undefined) delete process.env.DSH_HOME
+        else process.env.DSH_HOME = inheritedDshHome
+        try {
+          cleanupDesktopSafeModeEnvironment(desktopUserDataDir)
+        } catch (cause) {
+          electronLogger.error(`${BIN_NAME}: failed to remove the Safe Mode environment: ${cause instanceof Error ? cause.message : String(cause)}`)
+        }
+      }
       try {
         desktopRun?.markClean()
       } catch (cause) {
@@ -682,37 +695,10 @@ async function start(): Promise<void> {
     const profileDirectoriesBeforeStartup = new Set(
       listDesktopProfiles(homeDir).map(profile => profile.dir),
     )
-    const profileStartup = beginDesktopProfileStartup(selectionStatePath, homeDir)
-    const activeProfileName = profileStartup.profileName
-    const activeProfileDir = resolveProfileDir(activeProfileName, homeDir)
-    if (!profileDirectoriesBeforeStartup.has(activeProfileDir)) {
-      clearDesktopProfileUsageHistory(releaseUserDataLocations, activeProfileDir)
-    }
-    // Recovery can open before Profile composition and Host boot. Fix the
-    // launcher-owned terminal identity as soon as Profile selection succeeds
-    // so every recovery entry path exposes the same terminal action.
-    runtime.configureTerminal({
-      profileName: activeProfileName,
-      profileDir: activeProfileDir,
-      homeDir,
-    })
-    recoveryTerminalAvailable = true
+    // Keep Profile recovery usable when the persisted selection no longer exists.
     const locale = desktopLocaleFromLanguageTag(app.getLocale())
-    if (safeModePaths !== undefined) {
-      const safeModeTray = runtime.registerTrayItem({
-        group: 'status',
-        order: -100,
-        label: () => desktopTrayLabel(runtime.locale, 'exitSafeMode'),
-        invoke: async () => {
-          if (restartRequested) return
-          restartRequested = true
-          nativeExit.requestRelaunch(desktopDefaultRelaunchArguments())
-          await shutdown.request(0)
-        },
-      })
-      generation.own(() => { safeModeTray.dispose() })
-    }
     const recoveryProfileToken = randomUUID()
+    let activeProfileName = readDesktopProfileState(selectionStatePath).active
     let expectedRecoveryProfileName = activeProfileName
     const openStartupProfileCreator = async (): Promise<void> => {
       await new Promise<void>(resolve => {
@@ -768,6 +754,36 @@ async function start(): Promise<void> {
         expectedRecoveryProfileName = name
       },
       openCreator: openStartupProfileCreator,
+    }
+    const profileStartup = beginDesktopProfileStartup(selectionStatePath, homeDir)
+    activeProfileName = profileStartup.profileName
+    expectedRecoveryProfileName = activeProfileName
+    const activeProfileDir = resolveProfileDir(activeProfileName, homeDir)
+    if (!profileDirectoriesBeforeStartup.has(activeProfileDir)) {
+      clearDesktopProfileUsageHistory(releaseUserDataLocations, activeProfileDir)
+    }
+    // Recovery can open before Profile composition and Host boot. Fix the
+    // launcher-owned terminal identity as soon as Profile selection succeeds
+    // so every recovery entry path exposes the same terminal action.
+    runtime.configureTerminal({
+      profileName: activeProfileName,
+      profileDir: activeProfileDir,
+      homeDir,
+    })
+    recoveryTerminalAvailable = true
+    if (safeModePaths !== undefined) {
+      const safeModeTray = runtime.registerTrayItem({
+        group: 'status',
+        order: -100,
+        label: () => desktopTrayLabel(runtime.locale, 'exitSafeMode'),
+        invoke: async () => {
+          if (restartRequested) return
+          restartRequested = true
+          nativeExit.requestRelaunch(desktopDefaultRelaunchArguments())
+          await shutdown.request(0)
+        },
+      })
+      generation.own(() => { safeModeTray.dispose() })
     }
     const openCompatibilityProfileSelector = async (): Promise<'restart' | 'cancel' | 'unavailable'> => {
       const profileActions = startupRecoveryProfileActions
@@ -1488,7 +1504,9 @@ async function start(): Promise<void> {
     lifecycleRecorder.completeStartup(startupStage, rendererReport)
     notifySkippedOptionalEntries(runtime, electronLogger, prepared.skippedOptionalEntries)
     notifyWindowsVolumeConcerns(runtime, electronLogger, windowsVolumeConcerns)
-    if (safeModePaths !== undefined) notifyDesktopSafeModeActive(runtime, electronLogger)
+    if (safeModePaths !== undefined && DESKTOP_SAFE_MODE_DEFAULTS.settings.notifications.enabled) {
+      notifyDesktopSafeModeActive(runtime, electronLogger)
+    }
     if (sessionProjectionCacheRecovery !== undefined) {
       notifySessionProjectionCacheRecovery(runtime, electronLogger, sessionProjectionCacheRecovery)
     }

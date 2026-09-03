@@ -18,7 +18,7 @@ describe('Desktop relaunch arguments', () => {
     DESKTOP_SAFE_MODE_ARGUMENT,
   ]
 
-  it('strips the one-shot recovery marker from an ordinary relaunch', () => {
+  it('strips one-shot markers, including Safe Mode, from an ordinary relaunch', () => {
     expect(desktopDefaultRelaunchArguments(argv)).toEqual(['desktop-main.cjs', '--profile=work'])
   })
 

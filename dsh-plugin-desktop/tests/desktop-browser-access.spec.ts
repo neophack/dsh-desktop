@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  DESKTOP_BROWSER_ACCESS_COOKIE,
   createDesktopBrowserAccess,
   decideDesktopBrowserAccess,
   DESKTOP_RENDERER_ACCESS_HEADER,
@@ -30,11 +29,7 @@ describe('Desktop browser access policy', () => {
 
     expect(decideDesktopBrowserAccess(access, { headers: {}, url: '/' })).toBe('denied')
     access.setOrdinaryBrowserEnabled(true)
-    expect(decideDesktopBrowserAccess(access, { headers: {}, url: '/' })).toBe('denied')
-    expect(decideDesktopBrowserAccess(access, {
-      headers: { cookie: `${DESKTOP_BROWSER_ACCESS_COOKIE}=${RENDERER_TOKEN}` },
-      url: '/',
-    })).toBe('browser')
+    expect(decideDesktopBrowserAccess(access, { headers: {}, url: '/' })).toBe('browser')
     expect(access.rendererHeader.value).toBe(RENDERER_TOKEN)
     access.setOrdinaryBrowserEnabled(false)
     expect(decideDesktopBrowserAccess(access, { headers: {}, url: '/' })).toBe('denied')
@@ -69,38 +64,17 @@ describe('Desktop browser access policy', () => {
 
   it('allows only marker-free ordinary-browser traffic when enabled', () => {
     const access = createDesktopBrowserAccess(true, RENDERER_TOKEN)
-    const headers = { cookie: `${DESKTOP_BROWSER_ACCESS_COOKIE}=${RENDERER_TOKEN}` }
 
     for (const url of ['/', '/assets/index.js', '/api/events.sse', '/?workspace=one']) {
-      expect(decideDesktopBrowserAccess(access, { headers, url })).toBe('browser')
+      expect(decideDesktopBrowserAccess(access, { headers: {}, url })).toBe('browser')
     }
     for (const url of [
       '/?dsh-desktop-mode=compatibility',
       '/?dsh-desktop-platform=win32',
       '/?other=1&dsh-desktop-future=value',
     ]) {
-      expect(decideDesktopBrowserAccess(access, { headers, url })).toBe('denied')
+      expect(decideDesktopBrowserAccess(access, { headers: {}, url })).toBe('denied')
     }
-  })
-
-  it('creates a strict root bootstrap URL and recognizes it only while browser access is enabled', () => {
-    const access = createDesktopBrowserAccess(true, RENDERER_TOKEN)
-
-    expect(access.authenticatedUrl('https://desktop.local:43120/path?old=1#fragment'))
-      .toBe(`https://desktop.local:43120/?token=${RENDERER_TOKEN}`)
-    expect(decideDesktopBrowserAccess(access, {
-      headers: {},
-      url: `/?token=${RENDERER_TOKEN}`,
-    })).toBe('browser-auth')
-    expect(decideDesktopBrowserAccess(access, {
-      headers: {},
-      url: `/?token=${RENDERER_TOKEN}&extra=1`,
-    })).toBe('denied')
-    access.setOrdinaryBrowserEnabled(false)
-    expect(decideDesktopBrowserAccess(access, {
-      headers: {},
-      url: `/?token=${RENDERER_TOKEN}`,
-    })).toBe('denied')
   })
 
   it('fails closed for malformed URLs and Desktop marker attempts', () => {

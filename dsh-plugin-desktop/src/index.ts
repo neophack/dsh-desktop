@@ -1,5 +1,6 @@
 /** DSH Desktop Host plugin: owns the selected native shell generation. */
 
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
@@ -91,6 +92,19 @@ export const DESKTOP_SETTINGS_NAMESPACE = settingsNamespace('dsh-desktop')
 
 const UI_THEME_SETTINGS_NAMESPACE = settingsNamespace(THEME_SETTINGS_NAMESPACE)
 const UI_LOCALE_SETTINGS_NAMESPACE = settingsNamespace(LOCALE_SETTINGS_NAMESPACE)
+
+/** Apply the official Connection trust and browser-auth fence before a private Desktop route. */
+function rejectDesktopRequest(
+  ctx: Context,
+  req: IncomingMessage,
+  res: ServerResponse,
+): boolean {
+  const rejection = ctx.connection.requestRejection(req)
+  if (rejection === undefined) return false
+  res.writeHead(rejection)
+  res.end(rejection === 401 ? 'unauthorized' : 'forbidden')
+  return true
+}
 
 /** Narrow the upstream locale preference to the translations bundled by Desktop chrome. */
 function desktopLocalePreference(preference: string | undefined): DesktopLocale | undefined {
@@ -303,6 +317,7 @@ export function apply(ctx: Context, config: Config): void {
           kind: 'exact',
           path,
           handler: (req, res) => {
+            if (rejectDesktopRequest(ctx, req, res)) return
             return handler(
               req,
               res,
@@ -321,6 +336,7 @@ export function apply(ctx: Context, config: Config): void {
       kind: 'exact',
       path: RENDERER_BOOT_REPORT_PATH,
       handler: (req, res) => {
+        if (rejectDesktopRequest(ctx, req, res)) return
         return handleRendererBootRequest(
           req,
           res,
@@ -337,6 +353,7 @@ export function apply(ctx: Context, config: Config): void {
         kind: 'exact',
         path: DESKTOP_DIRECTORY_PICKER_PATH,
         handler: (req, res) => {
+          if (rejectDesktopRequest(ctx, req, res)) return
           return handleDesktopDirectoryPickerRequest(
             req,
             res,
@@ -355,6 +372,7 @@ export function apply(ctx: Context, config: Config): void {
         kind: 'exact',
         path: DESKTOP_DIRECTORY_VALIDATOR_PATH,
         handler: (req, res) => {
+          if (rejectDesktopRequest(ctx, req, res)) return
           return handleDesktopDirectoryValidationRequest(
             req,
             res,
@@ -454,7 +472,7 @@ export function apply(ctx: Context, config: Config): void {
         material,
         ...(runtime.windowsBuild === undefined ? {} : { windowsBuild: runtime.windowsBuild }),
         url,
-        authenticationUrl: browserAccess.authenticatedUrl(new URL(url).origin),
+        authenticationUrl: ctx.connection.authenticatedUrl(new URL(url).origin),
         rendererAccessHeader: browserAccess.rendererHeader,
         productName: 'DSH Desktop',
         windowTitle: 'DeepSeek Harness Desktop',

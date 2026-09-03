@@ -30,7 +30,7 @@ export const DESKTOP_SAFE_MODE_DEFAULTS: Readonly<{
   market: DesktopMarketProvider
   settings: DesktopSetupWizardSettings
 }> = Object.freeze({
-  market: 'dsh-market',
+  market: 'disabled',
   settings: Object.freeze({
     mode: 'compatibility',
     macosMaterial: 'off',
@@ -38,17 +38,17 @@ export const DESKTOP_SAFE_MODE_DEFAULTS: Readonly<{
     openBrowser: false,
     networkExposure: 'loopback',
     notifications: Object.freeze({
-      enabled: true,
-      notifyOnTurnCompletion: true,
-      notifyOnTurnFailure: true,
-      notifyOnJobCompletion: true,
-      notifyOnJobFailure: true,
+      enabled: false,
+      notifyOnTurnCompletion: false,
+      notifyOnTurnFailure: false,
+      notifyOnJobCompletion: false,
+      notifyOnJobFailure: false,
     }),
   }),
 })
 
 export interface DesktopSafeModePaths {
-  /** Root removed on the first launch that does not carry the Safe Mode argument. */
+  /** Root removed during Safe Mode shutdown and retried on the next normal launch. */
   readonly rootDir: string
   /** Isolated Harness home; Safe Mode never reads the normal `~/.dsh`. */
   readonly homeDir: string
@@ -154,7 +154,7 @@ export function resetDesktopSafeModeEnvironment(
   }
 }
 
-/** Reuse a prepared Safe Mode generation, or repair it with a fresh one. */
+/** Adopt the generation prepared for the next Safe Mode launch, or repair it with a fresh one. */
 export function ensureDesktopSafeModeEnvironment(userDataDir: string): DesktopSafeModePaths {
   const paths = desktopSafeModePaths(userDataDir)
   if (isRealDirectory(paths.rootDir) && validMarker(paths)

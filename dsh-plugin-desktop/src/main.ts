@@ -98,6 +98,7 @@ import {
 } from './startup-recovery-controller.ts'
 import {
   DesktopStartupRecoveryWindow,
+  type RecoveryWindowResult,
   type DesktopStartupRecoveryConfigurationPaths,
   type DesktopStartupRecoveryProfileActions,
   type DesktopStartupFailureStage,
@@ -156,7 +157,7 @@ import {
   type WindowsVolumeConcern,
 } from './windows-volume-diagnostics.ts'
 import type { RendererBootReport } from './renderer-boot-contract.ts'
-import { desktopLocaleFromLanguageTag } from './tray-locale.ts'
+import { desktopLocaleFromLanguageTag, desktopTrayLabel } from './tray-locale.ts'
 import { desktopNativeCopy } from './native-dialog-copy.ts'
 import {
   DESKTOP_NOTIFICATIONS_SETTINGS_NAMESPACE,
@@ -166,7 +167,18 @@ import {
   desktopDefaultRelaunchArguments,
   desktopRecoveryModeRequested,
   desktopRecoveryRelaunchArguments,
+  desktopSafeModeRelaunchArguments,
+  desktopSafeModeRequested,
 } from './relaunch-arguments.ts'
+import {
+  cleanupDesktopSafeModeEnvironment,
+  DESKTOP_SAFE_MODE_DEFAULTS,
+  DESKTOP_SAFE_MODE_PROFILE_NAME,
+  ensureDesktopSafeModeEnvironment,
+  resetDesktopSafeModeEnvironment,
+  desktopSafeModePaths,
+  type DesktopSafeModePaths,
+} from './safe-mode.ts'
 import {
   recoverOversizedSessionProjectionCache,
   type SessionProjectionCacheRecoveryResult,
@@ -178,6 +190,7 @@ import {
   DESKTOP_PRODUCT_NAME,
   DESKTOP_RELEASE_CHANNEL,
 } from './product-identity.ts'
+import { desktopRecoveryCopy } from './recovery-copy.ts'
 
 const BIN_NAME = DESKTOP_PACKAGE_NAME
 const PRODUCT_NAME = DESKTOP_PRODUCT_NAME
@@ -286,6 +299,22 @@ function notifySessionProjectionCacheRecovery(
   }
 }
 
+/** Explain the disposable environment after the Safe Mode renderer is healthy. */
+function notifyDesktopSafeModeActive(
+  runtime: ElectronDesktopRuntime,
+  logger: DesktopLogger,
+): void {
+  const copy = desktopRecoveryCopy(runtime.locale)
+  try {
+    runtime.updates.notify({
+      title: copy.safeModeNotificationTitle,
+      body: copy.safeModeNotificationBody,
+    })
+  } catch (cause) {
+    logger.error(`${BIN_NAME}: failed to show Safe Mode notification: ${cause instanceof Error ? cause.message : String(cause)}`)
+  }
+}
+
 /** Use one Profile-owned Market request as the first composition input. */
 function desktopProfileMarketSnapshot(market: DesktopMarketProvider): DesktopMarketSnapshot {
   return Object.freeze({
@@ -362,11 +391,14 @@ async function start(): Promise<void> {
   let startupRecoveryConfigurationPaths: DesktopStartupRecoveryConfigurationPaths | undefined
   let profileCheckpoint: DesktopProfileCheckpoint | undefined
   let startupRecoveryProfileActions: DesktopStartupRecoveryProfileActions | undefined
+  let safeModePaths: DesktopSafeModePaths | undefined
+  let prepareSafeMode: (() => void) | undefined
   let sessionProjectionCacheRecovery:
     | Extract<SessionProjectionCacheRecoveryResult, { status: 'quarantined' }>
     | undefined
   let recoveryTerminalAvailable = false
   let startupStage: DesktopStartupFailureStage = 'electron-ready'
+  const desktopUserDataDir = app.getPath('userData')
   const appVersion = desktopProductVersion()
   const currentDshVersion = dshProductVersion()
   const setupWizardVersions = Object.freeze({
@@ -375,6 +407,9 @@ async function start(): Promise<void> {
     setupRevision: desktopSetupWizardStateConstants.setupRevision,
   })
   const recoveryModeRequested = desktopRecoveryModeRequested()
+  const safeModeRequested = desktopSafeModeRequested()
+  const inheritedDshHome = process.env.DSH_HOME
+  const safeModeHomeDir = desktopSafeModePaths(desktopUserDataDir).homeDir
   try {
     logSink = new LogFileSink(join(app.getPath('userData'), 'logs'), {
       maxFileBytes: 10 * 1024 * 1024,
@@ -389,6 +424,16 @@ async function start(): Promise<void> {
     logSink = undefined
   }
   const electronLogger = new ElectronStderrLogger(logSink)
+  if (safeModeRequested) {
+    safeModePaths = ensureDesktopSafeModeEnvironment(desktopUserDataDir)
+  } else {
+    if (process.env.DSH_HOME === safeModeHomeDir) delete process.env.DSH_HOME
+    try {
+      cleanupDesktopSafeModeEnvironment(desktopUserDataDir)
+    } catch (cause) {
+      electronLogger.error(`${BIN_NAME}: failed to remove the previous Safe Mode environment: ${cause instanceof Error ? cause.message : String(cause)}`)
+    }
+  }
   const generation = new DesktopStartupGeneration({ logger: electronLogger })
   const generationId = generation.id
   const lifecycleRecorder = createDesktopLifecycleRecorder({
@@ -441,6 +486,15 @@ async function start(): Promise<void> {
       removeShutdownRequests?.()
       removeUncaughtExceptionLogging?.()
       removeChildProcessLogging?.()
+      if (safeModePaths !== undefined) {
+        if (inheritedDshHome === undefined) delete process.env.DSH_HOME
+        else process.env.DSH_HOME = inheritedDshHome
+        try {
+          cleanupDesktopSafeModeEnvironment(desktopUserDataDir)
+        } catch (cause) {
+          electronLogger.error(`${BIN_NAME}: failed to remove the Safe Mode environment: ${cause instanceof Error ? cause.message : String(cause)}`)
+        }
+      }
       try {
         desktopRun?.markClean()
       } catch (cause) {
@@ -490,7 +544,7 @@ async function start(): Promise<void> {
     failureDetail: string,
     controller: DesktopStartupRecoveryController | undefined,
     requested = false,
-  ): Promise<'restart' | 'quit' | 'unavailable'> => {
+  ): Promise<RecoveryWindowResult | 'unavailable'> => {
     if (!app.isReady()) return 'unavailable'
     try {
       startupRecoveryWindow = new DesktopStartupRecoveryWindow({
@@ -509,6 +563,8 @@ async function start(): Promise<void> {
         }),
         ...(recoveryTerminalAvailable ? { openTerminal: () => { runtime.openTerminal() } } : {}),
         ...(startupRecoveryProfileActions === undefined ? {} : { profileActions: startupRecoveryProfileActions }),
+        ...(prepareSafeMode === undefined ? {} : { enterSafeMode: prepareSafeMode }),
+        ...(safeModePaths === undefined ? {} : { safeModeActive: true }),
       })
       return await startupRecoveryWindow.run()
     } catch (cause) {
@@ -562,7 +618,25 @@ async function start(): Promise<void> {
       platform: process.platform,
     })
     for (const [name, value] of Object.entries(shellEnvironmentResolution.updates)) process.env[name] = value
-    const homeDir = resolveDshHome()
+    const profileUserDataDir = safeModePaths?.userDataDir ?? desktopUserDataDir
+    const homeDir = safeModePaths?.homeDir ?? resolveDshHome()
+    if (safeModePaths !== undefined) process.env.DSH_HOME = homeDir
+    prepareSafeMode = safeModePaths === undefined
+      ? () => {
+          const paths = resetDesktopSafeModeEnvironment(desktopUserDataDir)
+          try {
+            createDesktopWebProfile(paths.homeDir, DESKTOP_SAFE_MODE_PROFILE_NAME)
+            selectDesktopProfile(
+              join(paths.userDataDir, 'profile-selection', 'state.json'),
+              paths.homeDir,
+              DESKTOP_SAFE_MODE_PROFILE_NAME,
+            )
+          } catch (cause) {
+            cleanupDesktopSafeModeEnvironment(desktopUserDataDir)
+            throw cause
+          }
+        }
+      : undefined
     const projectionCacheRecovery = recoverOversizedSessionProjectionCache(homeDir)
     if (projectionCacheRecovery.status === 'quarantined') {
       sessionProjectionCacheRecovery = projectionCacheRecovery
@@ -604,9 +678,9 @@ async function start(): Promise<void> {
     })
     const dshBootstrapPath = fileURLToPath(new URL('./desktop-cli.js', import.meta.url))
     const releasePnpmRuntime = generation.own(() => { pnpmRuntime.dispose() })
-    const selectionStatePath = join(app.getPath('userData'), 'profile-selection', 'state.json')
-    const pluginManagementStatePath = join(app.getPath('userData'), 'plugin-management', 'state.json')
-    const marketUserDataDir = app.getPath('userData')
+    const selectionStatePath = join(profileUserDataDir, 'profile-selection', 'state.json')
+    const pluginManagementStatePath = join(profileUserDataDir, 'plugin-management', 'state.json')
+    const marketUserDataDir = profileUserDataDir
     const releaseUserDataLocations = desktopReleaseUserDataLocations(
       app.getPath('appData'),
       marketUserDataDir,
@@ -621,23 +695,10 @@ async function start(): Promise<void> {
     const profileDirectoriesBeforeStartup = new Set(
       listDesktopProfiles(homeDir).map(profile => profile.dir),
     )
-    const profileStartup = beginDesktopProfileStartup(selectionStatePath, homeDir)
-    const activeProfileName = profileStartup.profileName
-    const activeProfileDir = resolveProfileDir(activeProfileName, homeDir)
-    if (!profileDirectoriesBeforeStartup.has(activeProfileDir)) {
-      clearDesktopProfileUsageHistory(releaseUserDataLocations, activeProfileDir)
-    }
-    // Recovery can open before Profile composition and Host boot. Fix the
-    // launcher-owned terminal identity as soon as Profile selection succeeds
-    // so every recovery entry path exposes the same terminal action.
-    runtime.configureTerminal({
-      profileName: activeProfileName,
-      profileDir: activeProfileDir,
-      homeDir,
-    })
-    recoveryTerminalAvailable = true
+    // Keep Profile recovery usable when the persisted selection no longer exists.
     const locale = desktopLocaleFromLanguageTag(app.getLocale())
     const recoveryProfileToken = randomUUID()
+    let activeProfileName = readDesktopProfileState(selectionStatePath).active
     let expectedRecoveryProfileName = activeProfileName
     const openStartupProfileCreator = async (): Promise<void> => {
       await new Promise<void>(resolve => {
@@ -693,6 +754,36 @@ async function start(): Promise<void> {
         expectedRecoveryProfileName = name
       },
       openCreator: openStartupProfileCreator,
+    }
+    const profileStartup = beginDesktopProfileStartup(selectionStatePath, homeDir)
+    activeProfileName = profileStartup.profileName
+    expectedRecoveryProfileName = activeProfileName
+    const activeProfileDir = resolveProfileDir(activeProfileName, homeDir)
+    if (!profileDirectoriesBeforeStartup.has(activeProfileDir)) {
+      clearDesktopProfileUsageHistory(releaseUserDataLocations, activeProfileDir)
+    }
+    // Recovery can open before Profile composition and Host boot. Fix the
+    // launcher-owned terminal identity as soon as Profile selection succeeds
+    // so every recovery entry path exposes the same terminal action.
+    runtime.configureTerminal({
+      profileName: activeProfileName,
+      profileDir: activeProfileDir,
+      homeDir,
+    })
+    recoveryTerminalAvailable = true
+    if (safeModePaths !== undefined) {
+      const safeModeTray = runtime.registerTrayItem({
+        group: 'status',
+        order: -100,
+        label: () => desktopTrayLabel(runtime.locale, 'exitSafeMode'),
+        invoke: async () => {
+          if (restartRequested) return
+          restartRequested = true
+          nativeExit.requestRelaunch(desktopDefaultRelaunchArguments())
+          await shutdown.request(0)
+        },
+      })
+      generation.own(() => { safeModeTray.dispose() })
     }
     const openCompatibilityProfileSelector = async (): Promise<'restart' | 'cancel' | 'unavailable'> => {
       const profileActions = startupRecoveryProfileActions
@@ -754,7 +845,7 @@ async function start(): Promise<void> {
     }
     try {
       profileCheckpoint = new DesktopProfileCheckpoint({
-        userDataDir: app.getPath('userData'),
+        userDataDir: profileUserDataDir,
         profileDir: activeProfileDir,
         homeDir,
         profileName: activeProfileName,
@@ -853,7 +944,10 @@ async function start(): Promise<void> {
       startupRecoveryController?.dispose()
       startupRecoveryController = undefined
       if (recoveryResult === 'restart') nativeExit.requestRelaunch()
-      await shutdown.request(recoveryResult === 'restart' ? 0 : 1)
+      else if (recoveryResult === 'safe-mode') {
+        nativeExit.requestRelaunch(desktopSafeModeRelaunchArguments())
+      }
+      await shutdown.request(recoveryResult === 'restart' || recoveryResult === 'safe-mode' ? 0 : 1)
       return
     }
     startupStage = 'profile-composition'
@@ -884,7 +978,30 @@ async function start(): Promise<void> {
       marketSelection,
       preparationHooks,
     )
-    if (profilePreferences === undefined) {
+    if (safeModePaths !== undefined) {
+      const safeModeDefaults = DESKTOP_SAFE_MODE_DEFAULTS
+      await updateDesktopSetupWizardSettings(prepared.settingsDocument, safeModeDefaults.settings)
+      await selectDesktopMarketProvider(marketUserDataDir, safeModeDefaults.market)
+      marketSelection = readDesktopMarketStateForUserData(marketUserDataDir)
+      profilePreferences = await writeDesktopProfilePreferences(
+        marketUserDataDir,
+        prepared.profile.dir,
+        desktopProfilePreferencesFromSettings(
+          safeModeDefaults.settings,
+          safeModeDefaults.settings.notifications,
+          safeModeDefaults.market,
+        ),
+      )
+      prepared = prepareDesktopProfile(
+        process.env.DSH_TELEMETRY_DISABLED,
+        homeDir,
+        process.platform,
+        activeProfileName,
+        pluginManagementStatePath,
+        marketSelection,
+        preparationHooks,
+      )
+    } else if (profilePreferences === undefined) {
       const browserAccessMigrated = await migrateDesktopBrowserAccessSettings(prepared.settingsDocument)
       let windowMaterialMigrated = false
       try {
@@ -943,8 +1060,13 @@ async function start(): Promise<void> {
         preparationHooks,
       )
     }
-    const setupWizardState = readDesktopSetupWizardState(marketUserDataDir, prepared.profile.dir)
-    if (desktopSetupWizardRequired(setupWizardState, setupWizardVersions)) {
+    // Safe Mode must reach the working surface with shipped defaults. Its
+    // disposable Desktop state deliberately has no Setup marker, so reading
+    // it as an ordinary Profile would incorrectly open first-run Setup.
+    const setupWizardState = safeModePaths === undefined
+      ? readDesktopSetupWizardState(marketUserDataDir, prepared.profile.dir)
+      : undefined
+    if (safeModePaths === undefined && desktopSetupWizardRequired(setupWizardState, setupWizardVersions)) {
       const setupSettings = readDesktopSetupWizardSettings(prepared.settingsDocument)
       setupWizardWindow = new DesktopSetupWizardWindow({
         locale: desktopLocaleFromLanguageTag(app.getLocale()),
@@ -1015,7 +1137,7 @@ async function start(): Promise<void> {
     if (profileCheckpoint === undefined) {
       try {
         profileCheckpoint = new DesktopProfileCheckpoint({
-          userDataDir: app.getPath('userData'),
+          userDataDir: profileUserDataDir,
           profileDir: prepared.profile.dir,
           homeDir,
           profileName: activeProfileName,
@@ -1040,7 +1162,7 @@ async function start(): Promise<void> {
           dshBootstrapPath,
           profileName: activeProfileName,
           homeDir,
-          stateDir: join(app.getPath('userData'), 'host-commands', activeProfileName),
+          stateDir: join(profileUserDataDir, 'host-commands', activeProfileName),
           environment: process.env,
         })
       : undefined
@@ -1270,10 +1392,10 @@ async function start(): Promise<void> {
               ? desktopLanBrowserUrls(lan.actualPort, lan.addresses)
               : []
             return {
-              localUrl: browserAccess.authenticatedUrl(
+              localUrl: hostCtx.connection.authenticatedUrl(
                 desktopLoopbackBrowserUrl(hostCtx.webServer.port),
               ),
-              lanUrls: lanOrigins.map(url => browserAccess.authenticatedUrl(url)),
+              lanUrls: lanOrigins.map(url => hostCtx.connection.authenticatedUrl(url)),
               lanState: lan.state,
               lanError: lan.errorCode,
               lanCaFingerprint: lan.caFingerprint,
@@ -1381,6 +1503,9 @@ async function start(): Promise<void> {
     lifecycleRecorder.completeStartup(startupStage, rendererReport)
     notifySkippedOptionalEntries(runtime, electronLogger, prepared.skippedOptionalEntries)
     notifyWindowsVolumeConcerns(runtime, electronLogger, windowsVolumeConcerns)
+    if (safeModePaths !== undefined && DESKTOP_SAFE_MODE_DEFAULTS.settings.notifications.enabled) {
+      notifyDesktopSafeModeActive(runtime, electronLogger)
+    }
     if (sessionProjectionCacheRecovery !== undefined) {
       notifySessionProjectionCacheRecovery(runtime, electronLogger, sessionProjectionCacheRecovery)
     }
@@ -1403,6 +1528,9 @@ async function start(): Promise<void> {
       )
       if (recoveryResult === 'restart') {
         nativeExit.requestRelaunch()
+        exitCode = 0
+      } else if (recoveryResult === 'safe-mode') {
+        nativeExit.requestRelaunch(desktopSafeModeRelaunchArguments())
         exitCode = 0
       }
     }

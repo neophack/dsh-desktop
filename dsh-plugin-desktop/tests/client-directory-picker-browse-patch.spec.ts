@@ -2,11 +2,11 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 const patch = readFileSync(new URL(
-  '../../patches/dsh-client-ui-directory-picker-browse@0.1.1-rc.2.patch',
+  '../../patches/dsh-client-ui-directory-picker-browse@0.1.2-rc.1.patch',
   import.meta.url,
 ), 'utf8')
 
-describe('RC2 browse directory-picker client patch', () => {
+describe('RC1 browse directory-picker client patch', () => {
   it('publishes the Windows bridge through the compiled flow and declarations', () => {
     for (const marker of [
       '__DSH_DESKTOP_PICK_DIRECTORY__',
@@ -29,7 +29,7 @@ describe('RC2 browse directory-picker client patch', () => {
       'disabled: parentInert,',
       'if (path !== null) openDirectory(path);',
       'if (targetPath !== null) openDirectory(targetPath);',
-      'validateDirectory(path).then((allowed) => {',
+      'Promise.resolve().then(() => validateDirectory(path)).then((allowed) => {',
       'if (allowed) onOpen(path);',
     ]) {
       expect(patch).toContain(marker)

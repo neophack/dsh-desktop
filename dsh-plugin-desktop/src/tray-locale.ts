@@ -8,6 +8,7 @@ export type DesktopTrayLabelKey =
   | 'checkingForUpdates'
   | 'downloadingUpdate'
   | 'exportDiagnostics'
+  | 'exitSafeMode'
   | 'openDesktop'
   | 'openTerminal'
   | 'profile'
@@ -26,6 +27,7 @@ const labels: Record<DesktopLocale, Record<DesktopTrayLabelKey, (value: string) 
     checkingForUpdates: () => 'Checking for Updates…',
     downloadingUpdate: version => `Downloading DSH Desktop ${version}…`,
     exportDiagnostics: () => 'Export Diagnostics…',
+    exitSafeMode: () => 'Exit Safe Mode and Restart…',
     openDesktop: productName => `Open ${productName}`,
     openTerminal: () => 'Open DSH Terminal',
     profile: profileName => `Profile: ${profileName}`,
@@ -43,6 +45,7 @@ const labels: Record<DesktopLocale, Record<DesktopTrayLabelKey, (value: string) 
     checkingForUpdates: () => '正在检查更新…',
     downloadingUpdate: version => `正在下载 DSH Desktop ${version}…`,
     exportDiagnostics: () => '导出诊断信息…',
+    exitSafeMode: () => '退出安全模式并重启…',
     openDesktop: productName => `打开 ${productName}`,
     openTerminal: () => '打开 DSH 终端',
     profile: profileName => `Profile：${profileName}`,

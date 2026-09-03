@@ -33,7 +33,7 @@ function installWebClient(
   const webDir = join(home, 'profiles', 'web')
   const template = PROFILE_TEMPLATES.web
   if (template === undefined) throw new Error('test requires the shipped Web template')
-  initProfile(webDir, template)
+  initProfile(webDir, template.bundles, template.patchReload)
   const packageDir = join(webDir, 'node_modules', ...packageName.split('/'))
   mkdirSync(packageDir, { recursive: true })
   writeFileSync(join(packageDir, 'package.json'), JSON.stringify({
@@ -79,21 +79,20 @@ describe('desktop profile composition', {
   it('reads packaged Cordis skills from the physical unpacked preset root', () => {
     const home = temporaryHome()
     const resources = join(home, 'resources')
-    const archivedDsh = join(
+    const archivedPresets = join(
       resources,
       'app.asar',
       'node_modules',
       '@deepseek-ai',
-      'dsh',
+      'dsh-agent-presets',
     )
     const physicalPresetRoot = join(
       resources,
       'app.asar.unpacked',
       'node_modules',
       '@deepseek-ai',
-      'dsh',
-      'config',
-      'agent-presets',
+      'dsh-agent-presets',
+      'presets',
     )
     const skillPath = join(
       physicalPresetRoot,
@@ -103,10 +102,10 @@ describe('desktop profile composition', {
       'SKILL.md',
     )
     mkdirSync(join(resources, 'app.asar', 'lib'), { recursive: true })
-    mkdirSync(archivedDsh, { recursive: true })
+    mkdirSync(archivedPresets, { recursive: true })
     mkdirSync(dirname(skillPath), { recursive: true })
-    writeFileSync(join(archivedDsh, 'package.json'), JSON.stringify({
-      name: '@deepseek-ai/dsh',
+    writeFileSync(join(archivedPresets, 'package.json'), JSON.stringify({
+      name: '@deepseek-ai/dsh-agent-presets',
       exports: { './package.json': './package.json' },
     }) + '\n')
     writeFileSync(skillPath, '# Cordis plugin development\n')
@@ -658,7 +657,7 @@ virtualStoreDirMaxLength: 60
     const webDir = join(home, 'profiles', 'web')
     const template = PROFILE_TEMPLATES.web
     if (template === undefined) throw new Error('test requires the shipped Web template')
-    initProfile(webDir, template)
+    initProfile(webDir, template.bundles, template.patchReload)
     writeFileSync(join(webDir, 'cordis.patch.yml'), [
       '- id: ui-layout',
       "  name: '@deepseek-ai/dsh-client-ui-layout'",

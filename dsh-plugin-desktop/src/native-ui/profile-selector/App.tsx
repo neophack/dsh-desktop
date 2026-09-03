@@ -1,5 +1,6 @@
 import { AlertTriangle, ArrowLeft, RotateCcw } from 'lucide-react'
 import { Alert, AlertDescription } from '../components/ui/alert.tsx'
+import { ScrollArea } from '../components/ui/scroll-area.tsx'
 import { cn } from '../lib/utils.ts'
 import { DesktopFrame } from '../shared/DesktopFrame.tsx'
 import { DesktopProfileSelector, type DesktopProfileSelectorItem } from '../shared/ProfileSelector.tsx'
@@ -51,21 +52,23 @@ export function ProfileSelectorApp(): JSX.Element {
   return <><DesktopFrame /><main className={cn('dshNativeContent h-screen overflow-hidden p-5 sm:p-6', state.busy && 'pointer-events-none opacity-70')}>
     <section className="mx-auto flex h-full w-full max-w-2xl flex-col gap-4">
       <h1 className="sr-only">{copy.tabs.profiles}</h1>
-      <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-        <DesktopProfileSelector
-          profiles={state.profiles}
-          labels={{
-            title: copy.profiles,
-            description: copy.profilesBody,
-            current: copy.currentProfile,
-            select: copy.switchProfile,
-            empty: copy.profilesEmpty,
-            create: copy.addProfile,
-          }}
-          selectHref={name => href('switch', name)}
-          createHref={href('create')}
-        />
-      </div>
+      <ScrollArea className="min-h-0 flex-1 pr-3">
+        <div className="pb-1">
+          <DesktopProfileSelector
+            profiles={state.profiles}
+            labels={{
+              title: copy.profiles,
+              description: copy.profilesBody,
+              current: copy.currentProfile,
+              select: copy.switchProfile,
+              empty: copy.profilesEmpty,
+              create: copy.addProfile,
+            }}
+            selectHref={name => href('switch', name)}
+            createHref={href('create')}
+          />
+        </div>
+      </ScrollArea>
       <RecoveryActionFooter leading={<RecoveryActionLink href={href('cancel')} icon={<ArrowLeft />}>{copy.back}</RecoveryActionLink>}>
         <RecoveryActionLink href={href('restart')} icon={<RotateCcw />} variant={state.restartReady ? 'default' : 'outline'}>{copy.restart}</RecoveryActionLink>
       </RecoveryActionFooter>
