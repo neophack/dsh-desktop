@@ -25,7 +25,7 @@ import path from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import z from '@deepseek-ai/schemastery'
-import { NewApiClient, NewApiError, mergeModels, sharedCooldownRemaining, usageFromUser } from './newapi-client.ts'
+import { NewApiClient, NewApiError, mergeModels, probeChatKey, sharedCooldownRemaining, usageFromUser } from './newapi-client.ts'
 import type { NewApiServerInfo, NewApiToken, NewApiUser } from './newapi-client.ts'
 import type { NewApiSnapshot } from './types.ts'
 
@@ -815,6 +815,10 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
         if (result.ok) {
           snapshotCache = { payload: result.value, at: Date.now() }
           detach(persistSnapshot(result.value.baseUrl, result.value))
+          // A fresh fetch proves the management credential is live; spot-check
+          // the chat key against the gateway in the same beat so a key deleted
+          // server-side hides the route without waiting for a restart.
+          detach(dropDeadChatKey('fresh snapshot'))
         }
         return result
       } catch (error) {
@@ -1479,6 +1483,36 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
   }
 
   /**
+   * Drop a chat API key the gateway itself rejects. The credential store only
+   * knows the key EXISTS, and the selector-hiding machinery keys off that
+   * existence bit — so a key deleted on the web console (or left over from a
+   * previous server) kept every synced model on the menu while each chat
+   * request failed 401. Probing `/v1/models` with the key closes the gap
+   * against the server's own verdict; only a clean 401/403 drops the
+   * credential, so rate limits and outages never do. The unset fires
+   * reference-updated, which hides the route through the normal reconcile
+   * path; the next sign-in (or the startup self-heal above, from a still-live
+   * session) installs a working key. Env-sourced keys are skipped: the store
+   * cannot unset them and their owner manages them.
+   */
+  async function dropDeadChatKey(reason: string): Promise<void> {
+    try {
+      const baseUrl = currentBaseUrl()
+      if (baseUrl === '') return
+      const described = await ctx.credentials.describe(ref)
+      if (!described.configured || described.source === 'env') return
+      const resolved: { value?: unknown } | undefined = await ctx.credentials.resolve(ref)
+      if (typeof resolved?.value !== 'string' || resolved.value === '') return
+      const verdict = await probeChatKey(baseUrl, resolved.value, AbortSignal.timeout(15_000))
+      if (verdict !== 'invalid') return
+      await ctx.credentials.unset(ref)
+      logger.warn(`newapi: the server rejected the stored chat API key; removed it (${reason}) — the chat route hides until a sign-in re-keys it`)
+    } catch (error) {
+      logger.warn(`newapi: probing the chat API key failed (${reason}): ${describeError(error)}`)
+    }
+  }
+
+  /**
    * Startup heal for the stored chat route. `models.sync` bakes each model's
    * context window and input modalities into the llm-pi-ai profile at SYNC
    * time, so a route last synced before those existed keeps serving models
@@ -1535,11 +1569,16 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
     // run instead of repeating it.
     await ensureAccessTokenStored()
     await ensureApiKeyStored()
+    // The self-heal above only proves a key EXISTS; probe it against the
+    // gateway so a key deleted server-side drops before the reconcile below
+    // decides the route's visibility from the bare existence bit.
+    await dropDeadChatKey('startup')
     await reconcileCatalogVisibility('api key missing at startup')
     await healStoredRouteLimits()
   })(), undefined, (error) => {
     logger.warn(`newapi: startup maintenance failed: ${describeError(error)}`)
   })
+
 
   logger.info(`newapi: ready (route=${route}, apiKeyEnv=${apiKeyEnv})`)
 }

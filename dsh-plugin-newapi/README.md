@@ -29,6 +29,8 @@ Model sync deliberately does **not** register a parallel LLM adapter. It writes 
 
 **Models without a usable API key never show in the selector.** The selector's menu is driven entirely by the `llm-pi-ai` catalog, so the plugin hooks the chat key's credential commits (`credentials/reference-updated` — the very event the selector's catalog refreshes on): when the key is missing the whole route leaves the catalog immediately (its profile is stashed in the `newapi` namespace, keeping the synced models and limits), and when the key returns the profile is restored verbatim, no network needed. `models.sync` also refuses to run without a key (`not-configured`), so no code path can ever write a key-less route. A provider you deleted yourself stays deleted: the stash is only ever written by the plugin's own hide.
 
+Existence is only half the check: a key deleted on the web console still sits in the local store. The plugin therefore probes the stored key against the gateway's `/v1/models` at startup and after every fresh snapshot fetch, and drops it only on a clean 401/403 — rate limits, outages, and server errors never cost you a working key. The drop rides the same credential event, so the route hides through the normal path, and the next sign-in (or the startup self-heal from a still-live session) installs a working key.
+
 Quota values are converted with the server-reported `quota_per_unit` from `/api/status` (default 500,000, i.e. $1 = 500,000 units); USD amounts also show a local-currency reference using `usd_exchange_rate`.
 
 ## Install

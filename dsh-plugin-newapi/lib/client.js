@@ -36,6 +36,7 @@ var import_jsx_runtime2 = require("react/jsx-runtime");
 var NS = "settings.newapi";
 var CHANNEL = "/newapi";
 var QUOTA_PER_UNIT = 5e5;
+var STALE_ATTEMPTS_BEFORE_NOTICE = 3;
 function money(value, currency, rate) {
   if (value === void 0) return "--";
   if (currency === "cny" && rate > 0) return `\xA5${(value * rate).toFixed(2)}`;
@@ -58,7 +59,7 @@ function formatCachedAt(ms) {
   return new Date(ms).toLocaleString();
 }
 function StaleNote(props) {
-  if (props.snapshot?.stale !== true) return null;
+  if (props.snapshot?.stale !== true || !props.confirmed) return null;
   return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { style: { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--dsw-alias-label-tertiary, inherit)" }, children: [
     /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.StateDot, { state: "warning" }),
     props.t("staleCache", { time: formatCachedAt(props.snapshot.cachedAt) })
@@ -282,7 +283,9 @@ var SETTINGS_CSS = `
   height: 8px;
   border-radius: 999px;
   overflow: hidden;
-  background: var(--dsw-alias-bg-layer-2);
+  /* Unused portion reads as Apple systemGray fill; layer-2 wins when defined. */
+  background: var(--dsw-alias-bg-layer-2, rgba(120, 120, 128, 0.16));
+  box-shadow: inset 0 0 0 0.5px rgba(120, 120, 128, 0.2);
 }
 .dshNewApiUsageFill {
   height: 100%;
@@ -429,6 +432,7 @@ var zh = {
   quotaRemaining: "\u5269\u4F59",
   quotaTotal: "\u603B\u91CF",
   unlimited: "\u4E0D\u9650\u91CF",
+  quotaLow: "\u7528\u91CF\u5DF2\u8D85\u8FC7 80%, \u8BF7\u6CE8\u610F\u5269\u4F59\u989D\u5EA6\u3002",
   tokens: "API \u5BC6\u94A5(\u4EE4\u724C)",
   tokenName: "\u540D\u79F0",
   tokenKey: "\u5BC6\u94A5",
@@ -440,7 +444,6 @@ var zh = {
   noTokens: "\u6CA1\u6709\u53EF\u7528\u7684\u4EE4\u724C\u3002\u8BF7\u5728 NewAPI \u63A7\u5236\u53F0\u521B\u5EFA\u3002",
   noTokensHint: "\u6CA1\u6709\u53EF\u7528\u7684\u4EE4\u724C, \u70B9\u51FB\u53F3\u4E0A\u89D2\u300C\u521B\u5EFA\u5BC6\u94A5\u300D\u76F4\u63A5\u65B0\u5EFA\u4E00\u4E2A\u3002",
   createToken: "\u521B\u5EFA\u5BC6\u94A5",
-  revealKey: "\u663E\u793A",
   copyKey: "\u590D\u5236",
   keyCreatedOnce: "\u65B0\u5BC6\u94A5\u300C{name}\u300D\u5DF2\u521B\u5EFA, \u5B8C\u6574\u5BC6\u94A5\u4EC5\u6B64\u4E00\u6B21\u663E\u793A:",
   keyCopied: "\u5BC6\u94A5\u5DF2\u590D\u5236\u5230\u526A\u8D34\u677F\u3002",
@@ -530,6 +533,7 @@ var en = {
   quotaRemaining: "Remaining",
   quotaTotal: "Total",
   unlimited: "Unlimited",
+  quotaLow: "Over 80% of the plan quota is used \u2014 watch the remaining balance.",
   tokens: "API keys (tokens)",
   tokenName: "Name",
   tokenKey: "Key",
@@ -541,7 +545,6 @@ var en = {
   noTokens: "No tokens. Create one in the NewAPI console.",
   noTokensHint: 'No tokens yet \u2014 click "Create key" above to make one right here.',
   createToken: "Create key",
-  revealKey: "Reveal",
   copyKey: "Copy",
   keyCreatedOnce: 'Key "{name}" created \u2014 shown only once:',
   keyCopied: "Key copied to clipboard.",
@@ -597,11 +600,11 @@ var cardTitleStyle = {
   color: "var(--dsw-alias-label-tertiary, inherit)"
 };
 function UsageBar(props) {
-  const { used, total } = props;
+  const { used, total, warnLabel } = props;
   const known = used !== void 0 && total !== void 0 && total > 0;
   const ratio = known ? Math.min(1, Math.max(0, used / total)) : 0;
   const warn = known && ratio >= 0.8;
-  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshNewApiUsage", children: [
+  const bar = /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "dshNewApiUsage", children: [
     /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
       "div",
       {
@@ -621,6 +624,11 @@ function UsageBar(props) {
       }
     ),
     /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "dshNewApiUsagePercent", children: known ? `${Math.round(ratio * 100)}%` : "--" })
+  ] });
+  if (!warn || warnLabel === void 0) return bar;
+  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", flexDirection: "column", gap: 6 }, children: [
+    bar,
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { style: { fontSize: 12, color: "var(--dsw-alias-state-warn-primary, #e6a700)" }, children: warnLabel })
   ] });
 }
 function NewApiFooterButton(props) {
@@ -741,6 +749,8 @@ function useNewApiSession(call, t, options = {}) {
   const [message, setMessage] = (0, import_react.useState)(void 0);
   const [error, setError] = (0, import_react.useState)(void 0);
   const [snapshot, setSnapshot] = (0, import_react.useState)(void 0);
+  const [staleConfirmed, setStaleConfirmed] = (0, import_react.useState)(false);
+  const staleStreakRef = (0, import_react.useRef)(0);
   const [syncing, setSyncing] = (0, import_react.useState)(false);
   const mountedRef = (0, import_react.useRef)(true);
   (0, import_react.useEffect)(() => () => {
@@ -765,6 +775,8 @@ function useNewApiSession(call, t, options = {}) {
   const applySnapshot2 = (value) => {
     setSnapshot(value);
     setServer(value.server);
+    staleStreakRef.current = value.stale === true ? staleStreakRef.current + 1 : 0;
+    setStaleConfirmed(staleStreakRef.current >= STALE_ATTEMPTS_BEFORE_NOTICE);
   };
   const loadSnapshot = async () => {
     const result = await call("snapshot.get");
@@ -952,6 +964,7 @@ function useNewApiSession(call, t, options = {}) {
     setDefaultContextWindow,
     server,
     snapshot,
+    staleConfirmed,
     configured,
     busy,
     syncing,
@@ -1034,6 +1047,7 @@ function NewApiPopup(props) {
     baseUrl,
     server,
     snapshot,
+    staleConfirmed,
     configured,
     busy,
     message,
@@ -1148,7 +1162,7 @@ function NewApiPopup(props) {
         t("notConfigured")
       ] })
     ] }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(StaleNote, { snapshot, t }),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(StaleNote, { snapshot, confirmed: staleConfirmed, t }),
       /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { style: cardStyle, children: [
         /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", alignItems: "center", gap: 10 }, children: [
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { style: {
@@ -1178,7 +1192,7 @@ function NewApiPopup(props) {
       ] }),
       /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { style: cardStyle, children: [
         /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h4", { style: cardTitleStyle, children: t("popupUsageTitle") }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(UsageBar, { used: snapshot?.usage.quotaUsed, total: snapshot?.usage.quotaTotal }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(UsageBar, { used: snapshot?.usage.quotaUsed, total: snapshot?.usage.quotaTotal, warnLabel: t("quotaLow") }),
         /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12, color: "var(--dsw-alias-label-secondary, inherit)" }, children: [
           /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { children: [
             t("quotaUsed"),
@@ -1233,6 +1247,7 @@ function NewApiSettings(props) {
     setDefaultContextWindow,
     server,
     snapshot,
+    staleConfirmed,
     configured,
     busy,
     syncing,
@@ -1260,7 +1275,6 @@ function NewApiSettings(props) {
   const [syncLimit, setSyncLimit] = (0, import_react.useState)("");
   const [editing, setEditing] = (0, import_react.useState)(void 0);
   const limits = config?.modelLimits ?? {};
-  const [revealed, setRevealed] = (0, import_react.useState)({});
   const [createdKey, setCreatedKey] = (0, import_react.useState)(void 0);
   const onSaveLimit = async () => {
     if (editing === void 0) return;
@@ -1284,12 +1298,6 @@ function NewApiSettings(props) {
     setMessage(t("limitSaved", { model: editing.id }));
     setEditing(void 0);
     await loadConfig();
-  };
-  const onRevealKey = async (id) => {
-    if (revealed[id] !== void 0) return;
-    const result = await call("tokens.revealKey", { id });
-    if (result.ok && result.value.key !== "") setRevealed((prev) => ({ ...prev, [id]: result.value.key }));
-    else if (!result.ok) setError(result.error.message);
   };
   const onCreateToken = async () => {
     setBusy(true);
@@ -1546,8 +1554,9 @@ function NewApiSettings(props) {
         )
       ] })
     ] }),
+    snapshot === void 0 && configured && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("section", { className: "dshNewApiSettingsGroup", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dshNewApiSettingsHint", style: { margin: 0 }, children: t("loading") }) }),
     snapshot !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(StaleNote, { snapshot, t }),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(StaleNote, { snapshot, confirmed: staleConfirmed, t }),
       /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { className: "dshNewApiSettingsGroup", "aria-label": t("account"), children: [
         /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h3", { children: t("account") }) }),
         /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dshNewApiSettingsActions", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dshNewApiSettingsButton dshNewApiSettingsButtonSecondary", disabled: busy, onClick: () => {
@@ -1555,7 +1564,7 @@ function NewApiSettings(props) {
         }, children: t("refresh") }) }),
         /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { children: [
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dshNewApiSettingsHint", style: { margin: 0 }, children: t("popupUsageTitle") }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(UsageBar, { used: snapshot.usage.quotaUsed, total: snapshot.usage.quotaTotal })
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(UsageBar, { used: snapshot.usage.quotaUsed, total: snapshot.usage.quotaTotal, warnLabel: t("quotaLow") })
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("dl", { className: "dshNewApiSettingsDl", children: [
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { children: t("usernameLabel") }),
@@ -1594,7 +1603,8 @@ function NewApiSettings(props) {
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("code", { children: createdKey.key }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dshNewApiSettingsButton", onClick: () => {
             void onCopyKey(createdKey.key);
-          }, children: t("copyKey") })
+          }, children: t("copyKey") }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dshNewApiSettingsButton dshNewApiSettingsButtonSecondary", onClick: () => setCreatedKey(void 0), children: t("close") })
         ] }),
         snapshot.tokens.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dshNewApiSettingsHint", children: t("noTokensHint") }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dshNewApiSettingsTableWrap", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("table", { className: "dshNewApiSettingsTable", children: [
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("tr", { children: [
@@ -1607,19 +1617,9 @@ function NewApiSettings(props) {
           ] }) }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("tbody", { children: snapshot.tokens.map((row) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("tr", { children: [
             /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { children: row.name ?? String(row.id) }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { children: revealed[row.id] !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { style: { display: "inline-flex", gap: 6, alignItems: "center" }, children: [
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("code", { style: { fontFamily: "monospace" }, children: revealed[row.id] }),
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dshNewApiSettingsButton", onClick: () => {
-                void onCopyKey(revealed[row.id]);
-              }, children: t("copyKey") })
-            ] }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { style: { display: "inline-flex", gap: 6, alignItems: "center" }, children: [
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("code", { style: { fontFamily: "monospace", color: "var(--dsw-alias-label-secondary, inherit)" }, children: [
-                "\u2022\u2022\u2022\u2022",
-                row.key !== void 0 ? row.key.slice(-4) : "????"
-              ] }),
-              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "dshNewApiSettingsButton", disabled: busy, onClick: () => {
-                void onRevealKey(row.id);
-              }, children: t("revealKey") })
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("code", { style: { fontFamily: "monospace", color: "var(--dsw-alias-label-secondary, inherit)" }, children: [
+              "\u2022\u2022\u2022\u2022",
+              row.key !== void 0 ? row.key.slice(-4) : "????"
             ] }) }),
             /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { children: formatQuota(row.quota, snapshot.server.quotaPerUnit, currency, exchangeRate) }),
             /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { children: formatQuota(row.used_quota, snapshot.server.quotaPerUnit, currency, exchangeRate) }),

@@ -618,3 +618,25 @@ export function usageFromUser(user: NewApiUser, quotaPerUnit: number): NewApiUsa
     unlimited,
   }
 }
+
+/**
+ * Ground-truth check for a chat API key: one cheap GET against the gateway's
+ * OpenAI-compatible model list with the key as the bearer. The credential
+ * store only knows the key EXISTS; this asks the server whether it still
+ * authenticates. Only a clean 401/403 proves the key dead — rate limits,
+ * server errors, and network failures all answer 'unknown', so an outage
+ * never costs the user a working key. The key never leaves the host.
+ */
+export async function probeChatKey(baseUrl: string, key: string, signal?: AbortSignal): Promise<'ok' | 'invalid' | 'unknown'> {
+  let response: Response
+  try {
+    response = await fetch(`${baseUrl.replace(/\/+$/, '')}/v1/models`, {
+      headers: { authorization: `Bearer ${key}` },
+      signal,
+    })
+  } catch {
+    return 'unknown'
+  }
+  if (response.status === 401 || response.status === 403) return 'invalid'
+  return response.ok ? 'ok' : 'unknown'
+}

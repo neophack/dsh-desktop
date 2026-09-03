@@ -114,6 +114,9 @@ interface SnapshotView {
 
 const QUOTA_PER_UNIT = 500_000
 
+/** Stale-serve count before the "showing cached data" notice appears. */
+const STALE_ATTEMPTS_BEFORE_NOTICE = 3
+
 type Currency = 'cny' | 'usd'
 
 /** Format a USD-denominated amount in the selected display currency. */
@@ -143,9 +146,13 @@ function formatCachedAt(ms: number | undefined): string {
   return new Date(ms).toLocaleString()
 }
 
-/** Offline / background-refresh notice shown above data served from cache. */
-function StaleNote(props: { snapshot: SnapshotView | undefined, t: NonNullable<SectionProps['t']> }): JSX.Element | null {
-  if (props.snapshot?.stale !== true) return null
+/**
+ * Offline / background-refresh notice shown above data served from cache.
+ * Hidden until the connection has actually been retried and failed a few
+ * times, so a slow first connect doesn't flash "cached data" on open.
+ */
+function StaleNote(props: { snapshot: SnapshotView | undefined, confirmed: boolean, t: NonNullable<SectionProps['t']> }): JSX.Element | null {
+  if (props.snapshot?.stale !== true || !props.confirmed) return null
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--dsw-alias-label-tertiary, inherit)' }}>
       <StateDot state="warning" />
@@ -417,7 +424,9 @@ const SETTINGS_CSS = `
   height: 8px;
   border-radius: 999px;
   overflow: hidden;
-  background: var(--dsw-alias-bg-layer-2);
+  /* Unused portion reads as Apple systemGray fill; layer-2 wins when defined. */
+  background: var(--dsw-alias-bg-layer-2, rgba(120, 120, 128, 0.16));
+  box-shadow: inset 0 0 0 0.5px rgba(120, 120, 128, 0.2);
 }
 .dshNewApiUsageFill {
   height: 100%;
@@ -573,6 +582,7 @@ const zh: Record<string, string> = {
   quotaRemaining: '剩余',
   quotaTotal: '总量',
   unlimited: '不限量',
+  quotaLow: '用量已超过 80%, 请注意剩余额度。',
   tokens: 'API 密钥(令牌)',
   tokenName: '名称',
   tokenKey: '密钥',
@@ -673,6 +683,7 @@ const en: Record<string, string> = {
   quotaRemaining: 'Remaining',
   quotaTotal: 'Total',
   unlimited: 'Unlimited',
+  quotaLow: 'Over 80% of the plan quota is used — watch the remaining balance.',
   tokens: 'API keys (tokens)',
   tokenName: 'Name',
   tokenKey: 'Key',
@@ -746,14 +757,15 @@ const cardTitleStyle = {
  * Usage progress bar, Claude/Codex-style: a quiet 8px pill track on layer-2
  * with a flat brand fill and the percent set apart on the right in tabular
  * numerals — the bar itself stays a pure slab, no stripes or gradients. Used
- * ratio is clamped to [0, 1]; the fill switches to the warn color past 80%.
+ * ratio is clamped to [0, 1]; the fill switches to the warn color past 80%,
+ * and a `warnLabel` adds the same warning in words under the bar.
  */
-function UsageBar(props: { used: number | undefined, total: number | undefined }): JSX.Element {
-  const { used, total } = props
+function UsageBar(props: { used: number | undefined, total: number | undefined, warnLabel?: string }): JSX.Element {
+  const { used, total, warnLabel } = props
   const known = used !== undefined && total !== undefined && total > 0
   const ratio = known ? Math.min(1, Math.max(0, used / total)) : 0
   const warn = known && ratio >= 0.8
-  return (
+  const bar = (
     <div className="dshNewApiUsage">
       <div
         role="progressbar"
@@ -769,6 +781,13 @@ function UsageBar(props: { used: number | undefined, total: number | undefined }
         />
       </div>
       <span className="dshNewApiUsagePercent">{known ? `${Math.round(ratio * 100)}%` : '--'}</span>
+    </div>
+  )
+  if (!warn || warnLabel === undefined) return bar
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {bar}
+      <span style={{ fontSize: 12, color: 'var(--dsw-alias-state-warn-primary, #e6a700)' }}>{warnLabel}</span>
     </div>
   )
 }
@@ -923,6 +942,8 @@ interface SessionApi {
   setDefaultContextWindow: (value: string) => void
   server: ServerInfoView | undefined
   snapshot: SnapshotView | undefined
+  /** True once the stale cache survived several refresh attempts (server really unreachable). */
+  staleConfirmed: boolean
   configured: boolean
   busy: boolean
   syncing: boolean
@@ -975,6 +996,13 @@ function useNewApiSession(
   const [message, setMessage] = useState<string | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
   const [snapshot, setSnapshot] = useState<SnapshotView | undefined>(undefined)
+  const [staleConfirmed, setStaleConfirmed] = useState(false)
+  /**
+   * Consecutive stale-serve count behind `staleConfirmed`: each poll that
+   * still answers with cached data means one more refresh attempt failed,
+   * and only STALE_ATTEMPTS_BEFORE_NOTICE of them justify announcing it.
+   */
+  const staleStreakRef = useRef(0)
   const [syncing, setSyncing] = useState(false)
   /**
    * Live for as long as this surface is mounted. The mount sequence awaits
@@ -1009,6 +1037,8 @@ function useNewApiSession(
   const applySnapshot = (value: SnapshotView): void => {
     setSnapshot(value)
     setServer(value.server)
+    staleStreakRef.current = value.stale === true ? staleStreakRef.current + 1 : 0
+    setStaleConfirmed(staleStreakRef.current >= STALE_ATTEMPTS_BEFORE_NOTICE)
   }
 
   /**
@@ -1222,7 +1252,7 @@ function useNewApiSession(
 
   return {
     config, configLoaded, baseUrl, setBaseUrl, passwordLoginOn, setPasswordLoginOn,
-    currency, setCurrency, defaultContextWindow, setDefaultContextWindow, server, snapshot, configured, busy, syncing, message, error,
+    currency, setCurrency, defaultContextWindow, setDefaultContextWindow, server, snapshot, staleConfirmed, configured, busy, syncing, message, error,
     setBusy, setError, setMessage, setSyncing,
     embedded, username, setUsername, password, setPassword,
     loadConfig, probeOnce, onProbe, onEmbeddedLogin, startEmbeddedLogin, onEmbeddedCancel,
@@ -1288,7 +1318,7 @@ function NewApiPopup(props: SectionProps): JSX.Element | null {
   const t = props.t ?? NOOP_T
   const session = useNewApiSession(call, t, { autoLogin, onAuthenticated })
   const {
-    config, configLoaded, baseUrl, server, snapshot, configured, busy,
+    config, configLoaded, baseUrl, server, snapshot, staleConfirmed, configured, busy,
     message, error, embedded, username, setUsername, password, setPassword,
     passwordLoginOn, currency, loadConfig, onEmbeddedLogin, startEmbeddedLogin,
     onEmbeddedCancel, onPasswordLogin, onClear, onRefresh,
@@ -1396,7 +1426,7 @@ function NewApiPopup(props: SectionProps): JSX.Element | null {
             : (
               <>
                 {/* Cached-data notice while offline / background refresh */}
-                <StaleNote snapshot={snapshot} t={t} />
+                <StaleNote snapshot={snapshot} confirmed={staleConfirmed} t={t} />
 
                 {/* Account summary */}
                 <section style={cardStyle}>
@@ -1433,7 +1463,7 @@ function NewApiPopup(props: SectionProps): JSX.Element | null {
                 {/* Plan usage with progress bar */}
                 <section style={cardStyle}>
                   <h4 style={cardTitleStyle}>{t('popupUsageTitle')}</h4>
-                  <UsageBar used={snapshot?.usage.quotaUsed} total={snapshot?.usage.quotaTotal} />
+                  <UsageBar used={snapshot?.usage.quotaUsed} total={snapshot?.usage.quotaTotal} warnLabel={t('quotaLow')} />
                   <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12, color: 'var(--dsw-alias-label-secondary, inherit)' }}>
                     <span>{t('quotaUsed')}: <b style={{ fontVariantNumeric: 'tabular-nums' }}>{money(snapshot?.usage.quotaUsed, currency, exchangeRate)}</b></span>
                     <span>{t('quotaRemaining')}: <b style={{ fontVariantNumeric: 'tabular-nums' }}>
@@ -1487,7 +1517,7 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
   const {
     config, configLoaded, baseUrl, setBaseUrl, passwordLoginOn, setPasswordLoginOn,
     currency, setCurrency, defaultContextWindow, setDefaultContextWindow,
-    server, snapshot, configured, busy, syncing, message, error,
+    server, snapshot, staleConfirmed, configured, busy, syncing, message, error,
     setBusy, setError, setMessage, setSyncing,
     username, setUsername, password, setPassword, embedded, loadConfig,
     onProbe, onEmbeddedLogin, startEmbeddedLogin, onEmbeddedCancel, onPasswordLogin,
@@ -1780,9 +1810,16 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
             )}
       </section>
 
+      {/* Lower-half placeholder while the first snapshot is still in flight. */}
+      {snapshot === undefined && configured && (
+        <section className="dshNewApiSettingsGroup">
+          <p className="dshNewApiSettingsHint" style={{ margin: 0 }}>{t('loading')}</p>
+        </section>
+      )}
+
       {snapshot !== undefined && (
         <>
-          <StaleNote snapshot={snapshot} t={t} />
+          <StaleNote snapshot={snapshot} confirmed={staleConfirmed} t={t} />
 
           {/* Account details + plan usage bar */}
           <section className="dshNewApiSettingsGroup" aria-label={t('account')}>
@@ -1796,7 +1833,7 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
             </div>
             <div>
               <p className="dshNewApiSettingsHint" style={{ margin: 0 }}>{t('popupUsageTitle')}</p>
-              <UsageBar used={snapshot.usage.quotaUsed} total={snapshot.usage.quotaTotal} />
+              <UsageBar used={snapshot.usage.quotaUsed} total={snapshot.usage.quotaTotal} warnLabel={t('quotaLow')} />
             </div>
             <dl className="dshNewApiSettingsDl">
               <dt>{t('usernameLabel')}</dt>
@@ -1844,6 +1881,9 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
                 <code>{createdKey.key}</code>
                 <button type="button" className="dshNewApiSettingsButton" onClick={() => { void onCopyKey(createdKey.key) }}>
                   {t('copyKey')}
+                </button>
+                <button type="button" className="dshNewApiSettingsButton dshNewApiSettingsButtonSecondary" onClick={() => setCreatedKey(undefined)}>
+                  {t('close')}
                 </button>
               </div>
             )}
