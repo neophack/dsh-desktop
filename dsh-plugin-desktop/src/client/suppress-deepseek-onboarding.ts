@@ -7,7 +7,9 @@
  * API key has nothing to key it for. The prompt is an upstream client step in
  * the `settings.onboarding` slot (id `deepseek-official`); the documented way
  * to supersede a shipped occupant is to register the same id, which replaces
- * that cell. The replacement renders nothing and completes itself on mount,
+ * that cell. The slot registry rejects a same-id registration at an occupied
+ * priority, so the suppression registers one priority below the shipped step
+ * (the lowest order renders) to shadow it. The replacement renders nothing and completes itself on mount,
  * so the onboarding flow moves on (or ends). Upstream is never edited, and a
  * future profile without this client plugin simply gets the shipped step back.
  */
@@ -46,6 +48,8 @@ export function applyDeepSeekOnboardingSuppression(ctx: ClientContext): () => vo
   return ctx.slots.inject('settings.onboarding', () => ctx.slots.register({
     name: 'settings.onboarding',
     id: 'deepseek-official',
-    order: 0,
+    // One below the shipped step's priority 0: the lowest order renders, and
+    // the registry forbids re-registering an occupied (id, priority) cell.
+    order: -1,
   }, SuppressDeepSeekKeyOnboarding))
 }
