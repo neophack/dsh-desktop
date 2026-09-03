@@ -73,6 +73,13 @@ const server = createServer((req, res) => {
       { 'set-cookie': `new_api_refresh=${refreshCookie}; Path=/api/user/auth; HttpOnly; SameSite=Strict` })
     return
   }
+  // Chat-API surface: gated by the chat key (sk-...), never the management
+  // bearer — the host probes this to detect keys revoked server-side.
+  if (req.method === 'GET' && req.url === '/v1/models') {
+    if (bearer !== 'sk-full-key') { deny('invalid api key'); return }
+    send({ object: 'list', data: [] })
+    return
+  }
   if (!mintedBearers.has(bearer) && !accessTokens.has(bearer)) { deny('not logged in'); return }
   if (req.method === 'GET' && req.url === '/api/user/self') {
     if (accessTokens.has(bearer)) sawSelfOverAccessToken = true

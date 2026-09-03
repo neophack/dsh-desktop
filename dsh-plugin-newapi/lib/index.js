@@ -435,6 +435,19 @@ function usageFromUser(user, quotaPerUnit) {
     unlimited
   };
 }
+async function probeChatKey(baseUrl, key, signal) {
+  let response;
+  try {
+    response = await fetch(`${baseUrl.replace(/\/+$/, "")}/v1/models`, {
+      headers: { authorization: `Bearer ${key}` },
+      signal
+    });
+  } catch {
+    return "unknown";
+  }
+  if (response.status === 401 || response.status === 403) return "invalid";
+  return response.ok ? "ok" : "unknown";
+}
 
 // src/index.ts
 var DEFAULT_CONTEXT_WINDOW = 131072;
@@ -898,6 +911,7 @@ function apply(ctx, config = {}) {
         if (result.ok) {
           snapshotCache = { payload: result.value, at: Date.now() };
           detach(persistSnapshot(result.value.baseUrl, result.value));
+          detach(dropDeadChatKey("fresh snapshot"));
         }
         return result;
       } catch (error) {
@@ -1407,6 +1421,22 @@ function apply(ctx, config = {}) {
       logger.warn(`newapi: restoring the chat API key failed: ${describeError(error)}`);
     }
   }
+  async function dropDeadChatKey(reason) {
+    try {
+      const baseUrl = currentBaseUrl();
+      if (baseUrl === "") return;
+      const described = await ctx.credentials.describe(ref);
+      if (!described.configured || described.source === "env") return;
+      const resolved = await ctx.credentials.resolve(ref);
+      if (typeof resolved?.value !== "string" || resolved.value === "") return;
+      const verdict = await probeChatKey(baseUrl, resolved.value, AbortSignal.timeout(15e3));
+      if (verdict !== "invalid") return;
+      await ctx.credentials.unset(ref);
+      logger.warn(`newapi: the server rejected the stored chat API key; removed it (${reason}) \u2014 the chat route hides until a sign-in re-keys it`);
+    } catch (error) {
+      logger.warn(`newapi: probing the chat API key failed (${reason}): ${describeError(error)}`);
+    }
+  }
   async function healStoredRouteLimits() {
     try {
       const defaultContextWindow = currentDefaultContextWindow();
@@ -1440,6 +1470,7 @@ function apply(ctx, config = {}) {
   detach((async () => {
     await ensureAccessTokenStored();
     await ensureApiKeyStored();
+    await dropDeadChatKey("startup");
     await reconcileCatalogVisibility("api key missing at startup");
     await healStoredRouteLimits();
   })(), void 0, (error) => {

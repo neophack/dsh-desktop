@@ -61,7 +61,7 @@
   ],
   "scripts": {
     "build": "node build.mjs",
-    "test": "node test/smoke.mjs && node test/client-shape.mjs && node test/login-flow.mjs && node test/crash-safety.mjs && node test/route-heal.mjs && node test/route-visibility.mjs && node test/snapshot-cache.mjs",
+    "test": "node test/smoke.mjs && node test/client-shape.mjs && node test/login-flow.mjs && node test/crash-safety.mjs && node test/route-heal.mjs && node test/route-visibility.mjs && node test/snapshot-cache.mjs && node test/key-probe.mjs",
     "prepublishOnly": "node build.mjs"
   },
   "keywords": [
