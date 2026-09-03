@@ -26,3 +26,12 @@
     printUrl: false
     surfaceContext: true
     trustedHosts: []
+
+# Desktop ships an EMPTY default DeepSeek catalog: chat goes through the
+# configured provider (NewAPI), so the upstream V4 Flash/Pro/Vision defaults
+# must not appear as selector candidates. The route stays configurable — a
+# user (or the Models page) can still add models under `llm-deepseek.models`
+# in settings, which overrides this composition base.
+- id: llm-deepseek
+  config:
+    models: []
