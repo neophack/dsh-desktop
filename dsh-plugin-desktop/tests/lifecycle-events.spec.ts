@@ -24,6 +24,7 @@ import {
   type DesktopLifecycleEvent,
   type DesktopLifecycleSummary,
 } from '../src/lifecycle-events.ts'
+import { canCreateSymlinks } from './support/symlink-capability.ts'
 
 interface CapturedLogger extends DesktopLogger {
   readonly error: ReturnType<typeof vi.fn<(message: string) => void>>
@@ -334,7 +335,9 @@ describe('desktop lifecycle events', () => {
     }
   }, 10_000)
 
-  it('treats linked or unsafe evidence targets as best-effort logger-only failures', () => {
+  // A directory link (junction on win32) needs no elevated privilege, unlike a
+  // true file symlink, so this scenario runs unconditionally.
+  it('treats a linked lifecycle-events parent directory as a best-effort logger-only failure', () => {
     const linkedParentDir = tempUserData('dsh-lifecycle-parent-link-')
     const linkedParentTarget = join(linkedParentDir, 'target')
     mkdirSync(linkedParentTarget)
@@ -350,7 +353,9 @@ describe('desktop lifecycle events', () => {
     })
     expect(() => { linkedParent.startStartup('electron-ready') }).not.toThrow()
     expect(linkedParentLogger.error).toHaveBeenCalledWith(expect.stringContaining('failed to persist lifecycle evidence'))
+  })
 
+  it.skipIf(!canCreateSymlinks())('treats a symlinked lifecycle evidence file as a best-effort logger-only failure', () => {
     const linkedFileDir = tempUserData('dsh-lifecycle-file-link-')
     const linkedFileTarget = join(linkedFileDir, 'target.jsonl')
     mkdirSync(join(linkedFileDir, 'lifecycle-events'))
@@ -367,7 +372,10 @@ describe('desktop lifecycle events', () => {
     })
     expect(() => { linkedFile.startStartup('electron-ready') }).not.toThrow()
     expect(linkedFileLogger.error).toHaveBeenCalledWith(expect.stringContaining('failed to persist lifecycle evidence'))
+  })
 
+  // A hard link needs no elevated privilege on Windows, so this runs unconditionally.
+  it('treats a hardlinked lifecycle evidence file as a best-effort logger-only failure', () => {
     const hardlinkDir = tempUserData('dsh-lifecycle-hardlink-')
     const hardlinkTarget = join(hardlinkDir, 'target.jsonl')
     mkdirSync(join(hardlinkDir, 'lifecycle-events'))
@@ -384,7 +392,9 @@ describe('desktop lifecycle events', () => {
     })
     expect(() => { hardlink.startStartup('electron-ready') }).not.toThrow()
     expect(hardlinkLogger.error).toHaveBeenCalledWith(expect.stringContaining('failed to persist lifecycle evidence'))
+  })
 
+  it('treats an evidence path occupied by a directory as a best-effort logger-only failure', () => {
     const unsafeWriteDir = tempUserData('dsh-lifecycle-unsafe-write-')
     const unsafeWriteLogger = createLogger()
     const unsafeWrite = createDesktopLifecycleRecorder({

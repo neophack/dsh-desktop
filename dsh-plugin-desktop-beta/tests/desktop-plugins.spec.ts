@@ -26,6 +26,7 @@ import {
   ensureDesktopProfile,
   prepareDesktopProfile,
 } from '../src/profile.ts'
+import { canCreateSymlinks } from './support/symlink-capability.ts'
 
 interface Harness {
   readonly ctx: Context
@@ -469,14 +470,20 @@ describe('desktop direct bundle management', () => {
 
     writeFileSync(options.statePath, 'x'.repeat(64 * 1024 + 1))
     expect(() => readDesktopDisabledBundles(options.statePath, 'desktop')).toThrow('too large')
+  })
 
-    rmSync(options.statePath)
+  it.skipIf(!canCreateSymlinks())('rejects a symlinked state file (regular-file guard)', () => {
+    const root = temporaryRoot()
+    const options = bootstrap(root)
+    mkdirSync(dirname(options.statePath), { recursive: true })
     const target = join(root, 'real-state.json')
     writeFileSync(target, JSON.stringify({ version: 1, profiles: [] }))
     symlinkSync(target, options.statePath)
     expect(() => readDesktopDisabledBundles(options.statePath, 'desktop')).toThrow('regular file')
+  })
 
-    rmSync(options.statePath)
+  it('fails loud when the state path sits under a regular file instead of a directory', () => {
+    const root = temporaryRoot()
     const parentFile = join(root, 'not-a-directory')
     writeFileSync(parentFile, 'file')
     expect(() => readDesktopDisabledBundles(join(parentFile, 'state.json'), 'desktop')).toThrow()

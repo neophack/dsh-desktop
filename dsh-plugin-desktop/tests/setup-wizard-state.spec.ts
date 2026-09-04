@@ -24,6 +24,7 @@ import {
   type DesktopSetupWizardOutcome,
   type DesktopSetupWizardVersions,
 } from '../src/setup-wizard-state.ts'
+import { canCreateSymlinks } from './support/symlink-capability.ts'
 
 const temporaryDirectories: string[] = []
 const RECORDED_AT = '2026-08-28T04:05:06.789Z'
@@ -281,7 +282,7 @@ describe('Desktop Setup Wizard state', () => {
     expect(() => readDesktopSetupWizardState(userData, profile)).toThrow('permissions must be 700')
   })
 
-  it('never follows a marker symlink for read, replacement, or clear', async () => {
+  it.skipIf(!canCreateSymlinks())('never follows a marker symlink for read, replacement, or clear', async () => {
     const userData = temporaryDirectory('dsh-setup-state-user-')
     const profile = temporaryDirectory('dsh-setup-state-profile-')
     const outside = join(temporaryDirectory('dsh-setup-state-outside-'), 'outside.json')

@@ -24,6 +24,7 @@ import {
   DESKTOP_LIFECYCLE_SUMMARY_ENTRY,
   desktopLifecycleEvidencePath,
 } from '../src/lifecycle-events.ts'
+import { canCreateSymlinks } from './support/symlink-capability.ts'
 
 const APP_VERSION = '2.0.1-test'
 
@@ -164,7 +165,7 @@ describe('exportDiagnosticsZip', () => {
     expect(zip.readAsText('system-info.txt')).toContain('omitted-log-files: 1')
   })
 
-  it('skips a linked lifecycle evidence file without failing the diagnostic export', async () => {
+  it.skipIf(!canCreateSymlinks())('skips a linked lifecycle evidence file without failing the diagnostic export', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-dx-lifecycle-file-link-'))
     const logs = join(root, 'logs')
     const target = join(root, 'target.jsonl')

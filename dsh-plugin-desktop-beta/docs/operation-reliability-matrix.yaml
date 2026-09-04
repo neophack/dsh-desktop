@@ -45,7 +45,12 @@ operations:
       - { id: profile-health-checkpoints.stage.restore-skip, test: tests/profile-checkpoint.spec.ts, title: restores an explicitly selected slot and skips exactly the next healthy write }
       - { id: profile-health-checkpoints.stage.global-config, test: tests/profile-checkpoint.spec.ts, title: restores Harness-home settings and patches with the selected Profile slot }
       - { id: profile-health-checkpoints.stage.failed-health, test: tests/profile-checkpoint.spec.ts, title: keeps the post-restore skip marker until a healthy capture actually occurs }
-      - { id: profile-health-checkpoints.stage.safety, test: tests/profile-checkpoint.spec.ts, title: 'rejects missing package.json, symlinks, oversized files, and empty restore slots' }
+      - { id: profile-health-checkpoints.stage.safety.missing-manifest, test: tests/profile-checkpoint.spec.ts, title: 'rejects a missing package.json' }
+      - { id: profile-health-checkpoints.stage.safety.profile-symlink, test: tests/profile-checkpoint.spec.ts, title: 'rejects a symlinked profile file' }
+      - { id: profile-health-checkpoints.stage.safety.profile-oversized, test: tests/profile-checkpoint.spec.ts, title: 'rejects an oversized profile file' }
+      - { id: profile-health-checkpoints.stage.safety.settings-symlink, test: tests/profile-checkpoint.spec.ts, title: 'rejects a symlinked global settings file' }
+      - { id: profile-health-checkpoints.stage.safety.settings-oversized, test: tests/profile-checkpoint.spec.ts, title: 'rejects an oversized global settings file' }
+      - { id: profile-health-checkpoints.stage.safety.empty-slot, test: tests/profile-checkpoint.spec.ts, title: 'rejects restoring an empty slot' }
   - id: update-check
     owner: checkForStableUpdate (src/update-checker.ts)
     entrypoints: [checkForStableUpdate]

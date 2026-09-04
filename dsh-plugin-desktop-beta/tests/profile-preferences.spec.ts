@@ -22,6 +22,7 @@ import {
   writeDesktopProfilePreferences,
   type DesktopProfilePreferences,
 } from '../src/profile-preferences.ts'
+import { canCreateSymlinks } from './support/symlink-capability.ts'
 
 const temporaryDirectories: string[] = []
 const RECORDED_AT = '2026-08-28T06:07:08.901Z'
@@ -217,7 +218,7 @@ describe('Desktop Profile preferences', () => {
     expect(() => readDesktopProfilePreferences(userData, profile)).toThrow('permissions must be 700')
   })
 
-  it('never follows a state symlink for read, replacement, or clear', async () => {
+  it.skipIf(!canCreateSymlinks())('never follows a state symlink for read, replacement, or clear', async () => {
     const userData = temporaryDirectory('dsh-profile-preferences-user-')
     const profile = temporaryDirectory('dsh-profile-preferences-profile-')
     const outside = join(temporaryDirectory('dsh-profile-preferences-outside-'), 'outside.json')

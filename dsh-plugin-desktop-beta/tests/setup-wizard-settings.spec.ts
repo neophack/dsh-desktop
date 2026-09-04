@@ -20,6 +20,7 @@ import {
   updateDesktopSetupWizardSettings,
   type DesktopSetupWizardSettings,
 } from '../src/setup-wizard-settings.ts'
+import { canCreateSymlinks } from './support/symlink-capability.ts'
 
 const temporaryDirectories: string[] = []
 
@@ -382,7 +383,7 @@ describe('Desktop Setup Wizard settings document', () => {
     })
   })
 
-  it('never follows an existing settings-document symlink', async () => {
+  it.skipIf(!canCreateSymlinks())('never follows an existing settings-document symlink', async () => {
     const root = temporaryDirectory()
     const outside = join(temporaryDirectory(), 'outside.yaml')
     const path = join(root, 'settings.yaml')

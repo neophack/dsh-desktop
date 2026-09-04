@@ -18,6 +18,7 @@ import {
   inspectLatestDesktopProfileCheckpointUsage,
   type ProfileCheckpointOptions,
 } from '../src/profile-checkpoint.ts'
+import { canCreateSymlinks } from './support/symlink-capability.ts'
 
 const roots: string[] = []
 
@@ -364,28 +365,39 @@ describe('Desktop profile health checkpoints', () => {
     })
   })
 
-  it('rejects missing package.json, symlinks, oversized files, and empty restore slots', () => {
+  it('rejects a missing package.json', () => {
     const missing = fixture()
     unlinkSync(join(missing.profile, 'package.json'))
     expect(() => missing.checkpoint.captureHealthy()).toThrow('package.json is unavailable')
+  })
 
+  it.skipIf(!canCreateSymlinks())('rejects a symlinked profile file', () => {
     const symlink = fixture()
     unlinkSync(join(symlink.profile, 'cordis.patch.yml'))
     writeFileSync(join(symlink.root, 'outside.yml'), 'outside\n')
     symlinkSync(join(symlink.root, 'outside.yml'), join(symlink.profile, 'cordis.patch.yml'))
     expect(() => symlink.checkpoint.captureHealthy()).toThrow('regular file')
+  })
 
+  it('rejects an oversized profile file', () => {
     const oversized = fixture({ maxFileBytes: { 'package.json': 4 } })
     expect(() => oversized.checkpoint.captureHealthy()).toThrow('too large')
+  })
 
+  it.skipIf(!canCreateSymlinks())('rejects a symlinked global settings file', () => {
     const globalSymlink = fixture()
     unlinkSync(join(globalSymlink.home, 'settings.yaml'))
     writeFileSync(join(globalSymlink.root, 'outside-settings.yml'), 'outside\n')
     symlinkSync(join(globalSymlink.root, 'outside-settings.yml'), join(globalSymlink.home, 'settings.yaml'))
     expect(() => globalSymlink.checkpoint.captureHealthy()).toThrow('regular file')
+  })
 
+  it('rejects an oversized global settings file', () => {
     const oversizedSettings = fixture({ maxFileBytes: { 'home/settings.yaml': 4 } })
     expect(() => oversizedSettings.checkpoint.captureHealthy()).toThrow('too large')
+  })
+
+  it('rejects restoring an empty slot', () => {
     expect(() => fixture().checkpoint.restoreSlot('slot-3')).toThrow('slot-3 is empty')
   })
 })

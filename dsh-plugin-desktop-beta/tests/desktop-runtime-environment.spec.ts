@@ -18,6 +18,7 @@ import {
   installDesktopPnpmRuntime,
   type DesktopPnpmRuntimeOptions,
 } from '../src/desktop-runtime-environment.ts'
+import { canCreateSymlinks } from './support/symlink-capability.ts'
 
 const temporaryDirectories: string[] = []
 
@@ -319,7 +320,7 @@ describe('desktop Host pnpm runtime', () => {
     expect(environment.PATH).toBe(`${pathDir}${pathDelimiter}${originalPath}`)
   })
 
-  it('rejects symlinked state directories before changing PATH', () => {
+  it.skipIf(!canCreateSymlinks())('rejects symlinked state directories before changing PATH', () => {
     const root = temporaryDirectory()
     const target = join(root, 'target')
     const stateDir = join(root, 'runtime')
@@ -332,7 +333,7 @@ describe('desktop Host pnpm runtime', () => {
     expect(environment).toEqual({ PATH: '/usr/bin' })
   })
 
-  it('rejects a symlinked generated file before changing PATH', () => {
+  it.skipIf(!canCreateSymlinks())('rejects a symlinked generated file before changing PATH', () => {
     const root = temporaryDirectory()
     const stateDir = join(root, 'runtime')
     const pathDir = join(stateDir, 'bin')
@@ -372,7 +373,7 @@ describe('desktop Host pnpm runtime', () => {
     installation.dispose()
   })
 
-  it('removes stray symlinks without touching their targets', () => {
+  it.skipIf(!canCreateSymlinks())('removes stray symlinks without touching their targets', () => {
     const root = temporaryDirectory()
     const stateDir = join(root, 'runtime')
     const pathDir = join(stateDir, 'bin')
