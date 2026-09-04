@@ -45,9 +45,9 @@ function money(value, currency, rate) {
 function formatPrice(value, currency, rate) {
   return money(value, currency, rate);
 }
-function formatQuota(quota, quotaPerUnit, currency, rate) {
+function formatQuota(quota, quotaPerUnit, currency, rate, unlimitedLabel = "unlimited") {
   if (quota === void 0) return "--";
-  if (quota < 0) return "unlimited";
+  if (quota < 0) return unlimitedLabel;
   return money(quota / (quotaPerUnit > 0 ? quotaPerUnit : QUOTA_PER_UNIT), currency, rate);
 }
 function formatDate(seconds) {
@@ -458,6 +458,12 @@ var zh = {
   synced: "\u5DF2\u540C\u6B65 {count} \u4E2A\u6A21\u578B\u5230\u63D0\u4F9B\u65B9\u300C{route}\u300D; \u5BF9\u8BDD\u7684\u6A21\u578B\u9009\u62E9\u5668\u4E2D\u5373\u53EF\u9009\u62E9\u3002",
   syncNeedsConfig: "\u8BF7\u5148\u5B8C\u6210\u767B\u5F55\u3002",
   syncLimit: "\u6570\u91CF\u4E0A\u9650(\u53EF\u9009)",
+  modelChat: "\u5BF9\u8BDD\u4E2D\u53EF\u7528",
+  addToChat: "\u6DFB\u52A0",
+  removeFromChat: "\u79FB\u9664",
+  addedToChat: "\u5DF2\u6DFB\u52A0 {model} \u5230\u5BF9\u8BDD\u6A21\u578B\u9009\u62E9\u5668\u3002",
+  removedFromChat: "\u5DF2\u4ECE\u5BF9\u8BDD\u6A21\u578B\u9009\u62E9\u5668\u79FB\u9664 {model}\u3002",
+  modelsNoneSelectedHint: "\u9ED8\u8BA4\u4E0D\u6DFB\u52A0\u4EFB\u4F55\u6A21\u578B; \u70B9\u51FB\u6BCF\u884C\u7684\u300C\u6DFB\u52A0\u300D, \u6DFB\u52A0\u540E\u7684\u6A21\u578B\u4F1A\u51FA\u73B0\u5728\u5BF9\u8BDD\u7684\u6A21\u578B\u9009\u62E9\u5668\u4E2D, \u300C\u79FB\u9664\u300D\u5373\u53EF\u5220\u9664\u3002",
   modelLimits: "\u4E0A\u4E0B\u6587 / \u6700\u5927\u8F93\u51FA",
   modelImage: "\u652F\u6301\u56FE\u7247",
   editLimit: "\u8BBE\u7F6E",
@@ -479,7 +485,7 @@ var zh = {
   popupSignedInAs: "\u5DF2\u767B\u5F55",
   // Init key-setup dialog copy.
   initTitle: "\u8BBE\u7F6E NewAPI",
-  initHint: "\u5C1A\u672A\u914D\u7F6E NewAPI \u5BC6\u94A5, \u5BF9\u8BDD\u4E2D\u7684 NewAPI \u6A21\u578B\u6682\u4E0D\u53EF\u89C1\u3002\u5B8C\u6210\u767B\u5F55\u540E\u63D2\u4EF6\u4F1A\u81EA\u52A8\u83B7\u53D6/\u521B\u5EFA\u5BC6\u94A5\u5E76\u540C\u6B65\u6A21\u578B, \u672C\u5F39\u7A97\u968F\u4E4B\u81EA\u52A8\u5173\u95ED\u3002"
+  initHint: "\u5C1A\u672A\u914D\u7F6E NewAPI \u5BC6\u94A5, \u5BF9\u8BDD\u4E2D\u7684 NewAPI \u6A21\u578B\u6682\u4E0D\u53EF\u89C1\u3002\u5B8C\u6210\u767B\u5F55\u540E\u63D2\u4EF6\u4F1A\u81EA\u52A8\u83B7\u53D6/\u521B\u5EFA\u5BC6\u94A5\u5E76\u540C\u6B65\u5DF2\u6DFB\u52A0\u7684\u6A21\u578B, \u672C\u5F39\u7A97\u968F\u4E4B\u81EA\u52A8\u5173\u95ED\u3002"
 };
 var en = {
   nav: "NewAPI",
@@ -559,6 +565,12 @@ var en = {
   synced: 'Synced {count} models to provider "{route}"; pick them from the chat model selector.',
   syncNeedsConfig: "Sign in first.",
   syncLimit: "Limit (optional)",
+  modelChat: "In chat",
+  addToChat: "Add",
+  removeFromChat: "Remove",
+  addedToChat: "Added {model} to the chat model selector.",
+  removedFromChat: "Removed {model} from the chat model selector.",
+  modelsNoneSelectedHint: 'No model is added by default. Press "Add" on a row to offer it in the chat model selector; "Remove" deletes it again.',
   modelLimits: "Context / Max out",
   modelImage: "Image input",
   editLimit: "Set",
@@ -580,7 +592,7 @@ var en = {
   popupSignedInAs: "Signed in",
   // Init key-setup dialog copy.
   initTitle: "Set up NewAPI",
-  initHint: "No NewAPI credential yet, so the NewAPI models stay hidden in the chat selector. Finish the sign-in and the plugin captures/creates the key and syncs the models automatically \u2014 this dialog then closes by itself."
+  initHint: "No NewAPI credential yet, so the NewAPI models stay hidden in the chat selector. Finish the sign-in and the plugin captures/creates the key and syncs your added models automatically \u2014 this dialog then closes by itself."
 };
 var cardStyle = {
   display: "flex",
@@ -772,7 +784,7 @@ function useNewApiSession(call, t, options = {}) {
     setError(`${t("loadFailed")} (${result.error.code}: ${result.error.message})`);
     return void 0;
   };
-  const applySnapshot2 = (value) => {
+  const applySnapshot = (value) => {
     setSnapshot(value);
     setServer(value.server);
     staleStreakRef.current = value.stale === true ? staleStreakRef.current + 1 : 0;
@@ -781,7 +793,7 @@ function useNewApiSession(call, t, options = {}) {
   const loadSnapshot = async () => {
     const result = await call("snapshot.get");
     if (!result.ok) return;
-    applySnapshot2(result.value);
+    applySnapshot(result.value);
     if (result.value.stale !== true) return;
     for (let attempt = 0; attempt < 6; attempt += 1) {
       await new Promise((resolve) => {
@@ -789,7 +801,7 @@ function useNewApiSession(call, t, options = {}) {
       });
       const next = await call("snapshot.get");
       if (!next.ok) continue;
-      applySnapshot2(next.value);
+      applySnapshot(next.value);
       if (next.value.stale !== true) break;
     }
   };
@@ -948,7 +960,7 @@ function useNewApiSession(call, t, options = {}) {
       setError(result.error.message);
       return;
     }
-    applySnapshot2(result.value);
+    applySnapshot(result.value);
     if (result.value.stale === true) setError(t("staleCache", { time: formatCachedAt(result.value.cachedAt) }));
   };
   return {
@@ -980,6 +992,7 @@ function useNewApiSession(call, t, options = {}) {
     password,
     setPassword,
     loadConfig,
+    applySnapshot,
     probeOnce,
     onProbe,
     onEmbeddedLogin,
@@ -1214,12 +1227,12 @@ function NewApiPopup(props) {
           /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { style: { flex: "none", color: "var(--dsw-alias-label-tertiary, inherit)" }, children: [
             t("tokenQuota"),
             ": ",
-            formatQuota(row.quota, snapshot.server.quotaPerUnit, currency, exchangeRate)
+            formatQuota(row.quota, snapshot.server.quotaPerUnit, currency, exchangeRate, t("unlimited"))
           ] }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { style: { flex: "none", fontVariantNumeric: "tabular-nums" }, children: [
             t("quotaUsed"),
             ": ",
-            formatQuota(row.used_quota, snapshot.server.quotaPerUnit, currency, exchangeRate)
+            formatQuota(row.used_quota, snapshot.server.quotaPerUnit, currency, exchangeRate, t("unlimited"))
           ] })
         ] }, row.id)) })
       ] }),
@@ -1263,6 +1276,7 @@ function NewApiSettings(props) {
     setPassword,
     embedded,
     loadConfig,
+    applySnapshot,
     onProbe,
     onEmbeddedLogin,
     startEmbeddedLogin,
@@ -1275,6 +1289,20 @@ function NewApiSettings(props) {
   const [syncLimit, setSyncLimit] = (0, import_react.useState)("");
   const [editing, setEditing] = (0, import_react.useState)(void 0);
   const limits = config?.modelLimits ?? {};
+  const selectedModels = (0, import_react.useMemo)(() => new Set(config?.selectedModels ?? []), [config]);
+  const onToggleChat = async (id, selected) => {
+    setBusy(true);
+    setError(void 0);
+    setMessage(void 0);
+    const result = await call("models.setSelected", { id, selected });
+    setBusy(false);
+    if (!result.ok) {
+      setError(result.error.message);
+      return;
+    }
+    setMessage(t(selected ? "addedToChat" : "removedFromChat", { model: id }));
+    await loadConfig();
+  };
   const [createdKey, setCreatedKey] = (0, import_react.useState)(void 0);
   const onSaveLimit = async () => {
     if (editing === void 0) return;
@@ -1312,6 +1340,7 @@ function NewApiSettings(props) {
     setCreatedKey({ name: result.value.name, key: result.value.key });
     const refreshed = await call("snapshot.get", { force: true });
     if (refreshed.ok) applySnapshot(refreshed.value);
+    else setError(refreshed.error.message);
   };
   const onCopyKey = async (key) => {
     try {
@@ -1621,8 +1650,8 @@ function NewApiSettings(props) {
               "\u2022\u2022\u2022\u2022",
               row.key !== void 0 ? row.key.slice(-4) : "????"
             ] }) }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { children: formatQuota(row.quota, snapshot.server.quotaPerUnit, currency, exchangeRate) }),
-            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { children: formatQuota(row.used_quota, snapshot.server.quotaPerUnit, currency, exchangeRate) }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { children: formatQuota(row.quota, snapshot.server.quotaPerUnit, currency, exchangeRate, t("unlimited")) }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { children: formatQuota(row.used_quota, snapshot.server.quotaPerUnit, currency, exchangeRate, t("unlimited")) }),
             /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { children: formatDate(row.expired_time) }),
             /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { children: row.models === void 0 || row.models === "" || row.models === "-1" || row.models === "*" ? t("tokenAllModels") : row.models })
           ] }, row.id)) })
@@ -1633,6 +1662,7 @@ function NewApiSettings(props) {
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h3", { style: { margin: 0, flex: 1 }, children: t("models") }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_dsh_client_ui_primitives.Pill, { children: t("modelsCount", { count: models.length }) })
         ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "dshNewApiSettingsHint", children: t("modelsNoneSelectedHint") }),
         /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "dshNewApiSettingsTableWrap", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("table", { className: "dshNewApiSettingsTable", children: [
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("tr", { children: [
             /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { children: t("modelId") }),
@@ -1640,6 +1670,7 @@ function NewApiSettings(props) {
             /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { children: t("modelOutput") }),
             /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { children: t("modelLimits") }),
             /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { children: t("modelImage") }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", { children: t("modelChat") }),
             /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("th", {})
           ] }) }),
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("tbody", { children: models.map((model) => {
@@ -1705,6 +1736,31 @@ function NewApiSettings(props) {
                   title: t("modelImage"),
                   style: { color: storedLimit?.image === false ? "var(--dsw-alias-label-tertiary, inherit)" : "inherit" },
                   children: storedLimit?.image === false ? "\u2014" : "\u2713"
+                }
+              ) }),
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { style: { whiteSpace: "nowrap" }, children: selectedModels.has(model.id) ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+                "button",
+                {
+                  type: "button",
+                  className: "dshNewApiSettingsButton dshNewApiSettingsButtonSecondary",
+                  disabled: busy,
+                  title: t("removeFromChat"),
+                  onClick: () => {
+                    void onToggleChat(model.id, false);
+                  },
+                  children: t("removeFromChat")
+                }
+              ) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+                "button",
+                {
+                  type: "button",
+                  className: "dshNewApiSettingsButton",
+                  disabled: busy || !configured,
+                  title: t("addToChat"),
+                  onClick: () => {
+                    void onToggleChat(model.id, true);
+                  },
+                  children: t("addToChat")
                 }
               ) }),
               /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("td", { style: { whiteSpace: "nowrap" }, children: editingThis ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { style: { display: "inline-flex", gap: 6 }, children: [

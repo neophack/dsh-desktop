@@ -47,6 +47,8 @@ interface ConfigView {
   currency: Currency
   /** Per-model capability limits (tokens) and the image-input opt-out, persisted host-side. */
   modelLimits: Record<string, { contextWindow?: number, maxTokens?: number, image?: boolean }>
+  /** Model ids the user explicitly added to the chat selector (empty by default). */
+  selectedModels: string[]
   /** Context window (tokens) applied to every model without explicit limits; 0 = none. */
   defaultContextWindow: number
   authKind: string
@@ -130,9 +132,9 @@ function formatPrice(value: number | undefined, currency: Currency, rate: number
   return money(value, currency, rate)
 }
 
-function formatQuota(quota: number | undefined, quotaPerUnit: number, currency: Currency, rate: number): string {
+function formatQuota(quota: number | undefined, quotaPerUnit: number, currency: Currency, rate: number, unlimitedLabel = 'unlimited'): string {
   if (quota === undefined) return '--'
-  if (quota < 0) return 'unlimited'
+  if (quota < 0) return unlimitedLabel
   return money(quota / (quotaPerUnit > 0 ? quotaPerUnit : QUOTA_PER_UNIT), currency, rate)
 }
 
@@ -608,6 +610,12 @@ const zh: Record<string, string> = {
   synced: '已同步 {count} 个模型到提供方「{route}」; 对话的模型选择器中即可选择。',
   syncNeedsConfig: '请先完成登录。',
   syncLimit: '数量上限(可选)',
+  modelChat: '对话中可用',
+  addToChat: '添加',
+  removeFromChat: '移除',
+  addedToChat: '已添加 {model} 到对话模型选择器。',
+  removedFromChat: '已从对话模型选择器移除 {model}。',
+  modelsNoneSelectedHint: '默认不添加任何模型; 点击每行的「添加」, 添加后的模型会出现在对话的模型选择器中, 「移除」即可删除。',
   modelLimits: '上下文 / 最大输出',
   modelImage: '支持图片',
   editLimit: '设置',
@@ -628,7 +636,7 @@ const zh: Record<string, string> = {
   popupSignedInAs: '已登录',
   // Init key-setup dialog copy.
   initTitle: '设置 NewAPI',
-  initHint: '尚未配置 NewAPI 密钥, 对话中的 NewAPI 模型暂不可见。完成登录后插件会自动获取/创建密钥并同步模型, 本弹窗随之自动关闭。',
+  initHint: '尚未配置 NewAPI 密钥, 对话中的 NewAPI 模型暂不可见。完成登录后插件会自动获取/创建密钥并同步已添加的模型, 本弹窗随之自动关闭。',
 }
 
 const en: Record<string, string> = {
@@ -709,6 +717,12 @@ const en: Record<string, string> = {
   synced: 'Synced {count} models to provider "{route}"; pick them from the chat model selector.',
   syncNeedsConfig: 'Sign in first.',
   syncLimit: 'Limit (optional)',
+  modelChat: 'In chat',
+  addToChat: 'Add',
+  removeFromChat: 'Remove',
+  addedToChat: 'Added {model} to the chat model selector.',
+  removedFromChat: 'Removed {model} from the chat model selector.',
+  modelsNoneSelectedHint: 'No model is added by default. Press "Add" on a row to offer it in the chat model selector; "Remove" deletes it again.',
   modelLimits: 'Context / Max out',
   modelImage: 'Image input',
   editLimit: 'Set',
@@ -730,7 +744,7 @@ const en: Record<string, string> = {
   popupSignedInAs: 'Signed in',
   // Init key-setup dialog copy.
   initTitle: 'Set up NewAPI',
-  initHint: 'No NewAPI credential yet, so the NewAPI models stay hidden in the chat selector. Finish the sign-in and the plugin captures/creates the key and syncs the models automatically — this dialog then closes by itself.',
+  initHint: 'No NewAPI credential yet, so the NewAPI models stay hidden in the chat selector. Finish the sign-in and the plugin captures/creates the key and syncs your added models automatically — this dialog then closes by itself.',
 }
 
 /** Flat card wrapper: layer-1 surface, hairline border, 12px radius. */
@@ -959,6 +973,7 @@ interface SessionApi {
   password: string
   setPassword: (value: string) => void
   loadConfig: () => Promise<ConfigView | undefined>
+  applySnapshot: (value: SnapshotView) => void
   probeOnce: (url: string) => Promise<void>
   onProbe: () => Promise<void>
   onEmbeddedLogin: () => Promise<void>
@@ -1255,7 +1270,7 @@ function useNewApiSession(
     currency, setCurrency, defaultContextWindow, setDefaultContextWindow, server, snapshot, staleConfirmed, configured, busy, syncing, message, error,
     setBusy, setError, setMessage, setSyncing,
     embedded, username, setUsername, password, setPassword,
-    loadConfig, probeOnce, onProbe, onEmbeddedLogin, startEmbeddedLogin, onEmbeddedCancel,
+    loadConfig, applySnapshot, probeOnce, onProbe, onEmbeddedLogin, startEmbeddedLogin, onEmbeddedCancel,
     onPasswordLogin, onSaveSettings, onClear, onRefresh,
   }
 }
@@ -1484,10 +1499,10 @@ function NewApiPopup(props: SectionProps): JSX.Element | null {
                           </span>
                           <span style={{ flex: 1, minWidth: 12, borderBottom: '1px dotted var(--dsw-alias-border-l2, rgba(128,128,128,0.35))' }} />
                           <span style={{ flex: 'none', color: 'var(--dsw-alias-label-tertiary, inherit)' }}>
-                            {t('tokenQuota')}: {formatQuota(row.quota, snapshot.server.quotaPerUnit, currency, exchangeRate)}
+                            {t('tokenQuota')}: {formatQuota(row.quota, snapshot.server.quotaPerUnit, currency, exchangeRate, t('unlimited'))}
                           </span>
                           <span style={{ flex: 'none', fontVariantNumeric: 'tabular-nums' }}>
-                            {t('quotaUsed')}: {formatQuota(row.used_quota, snapshot.server.quotaPerUnit, currency, exchangeRate)}
+                            {t('quotaUsed')}: {formatQuota(row.used_quota, snapshot.server.quotaPerUnit, currency, exchangeRate, t('unlimited'))}
                           </span>
                         </div>
                       ))}
@@ -1519,7 +1534,7 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
     currency, setCurrency, defaultContextWindow, setDefaultContextWindow,
     server, snapshot, staleConfirmed, configured, busy, syncing, message, error,
     setBusy, setError, setMessage, setSyncing,
-    username, setUsername, password, setPassword, embedded, loadConfig,
+    username, setUsername, password, setPassword, embedded, loadConfig, applySnapshot,
     onProbe, onEmbeddedLogin, startEmbeddedLogin, onEmbeddedCancel, onPasswordLogin,
     onSaveSettings, onClear, onRefresh,
   } = session
@@ -1528,6 +1543,22 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
   /** Inline per-model limit editor ({ id } plus raw input strings and the image toggle). */
   const [editing, setEditing] = useState<{ id: string, contextWindow: string, maxTokens: string, image: boolean } | undefined>(undefined)
   const limits = config?.modelLimits ?? {}
+  const selectedModels = useMemo(() => new Set(config?.selectedModels ?? []), [config])
+
+  /** Add/remove one model from the chat selector; the backend re-syncs immediately. */
+  const onToggleChat = async (id: string, selected: boolean): Promise<void> => {
+    setBusy(true)
+    setError(undefined)
+    setMessage(undefined)
+    const result = await call<{ ids: string[] }>('models.setSelected', { id, selected })
+    setBusy(false)
+    if (!result.ok) {
+      setError(result.error.message)
+      return
+    }
+    setMessage(t(selected ? 'addedToChat' : 'removedFromChat', { model: id }))
+    await loadConfig()
+  }
   /** A freshly created key, shown once with a copy affordance. */
   const [createdKey, setCreatedKey] = useState<{ name: string, key: string } | undefined>(undefined)
 
@@ -1568,6 +1599,7 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
     setCreatedKey({ name: result.value.name, key: result.value.key })
     const refreshed = await call<SnapshotView>('snapshot.get', { force: true })
     if (refreshed.ok) applySnapshot(refreshed.value)
+    else setError(refreshed.error.message)
   }
 
   const onCopyKey = async (key: string): Promise<void> => {
@@ -1909,8 +1941,8 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
                           <td>
                             <code style={{ fontFamily: 'monospace', color: 'var(--dsw-alias-label-secondary, inherit)' }}>••••{row.key !== undefined ? row.key.slice(-4) : '????'}</code>
                           </td>
-                          <td>{formatQuota(row.quota, snapshot.server.quotaPerUnit, currency, exchangeRate)}</td>
-                          <td>{formatQuota(row.used_quota, snapshot.server.quotaPerUnit, currency, exchangeRate)}</td>
+                          <td>{formatQuota(row.quota, snapshot.server.quotaPerUnit, currency, exchangeRate, t('unlimited'))}</td>
+                          <td>{formatQuota(row.used_quota, snapshot.server.quotaPerUnit, currency, exchangeRate, t('unlimited'))}</td>
                           <td>{formatDate(row.expired_time)}</td>
                           <td>
                             {row.models === undefined || row.models === '' || row.models === '-1' || row.models === '*' ? t('tokenAllModels') : row.models}
@@ -1929,6 +1961,7 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
               <h3 style={{ margin: 0, flex: 1 }}>{t('models')}</h3>
               <Pill>{t('modelsCount', { count: models.length })}</Pill>
             </div>
+            <p className="dshNewApiSettingsHint">{t('modelsNoneSelectedHint')}</p>
             <div className="dshNewApiSettingsTableWrap">
               <table className="dshNewApiSettingsTable">
                 <thead>
@@ -1938,6 +1971,7 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
                     <th>{t('modelOutput')}</th>
                     <th>{t('modelLimits')}</th>
                     <th>{t('modelImage')}</th>
+                    <th>{t('modelChat')}</th>
                     <th />
                   </tr>
                 </thead>
@@ -2013,6 +2047,31 @@ function NewApiSettings(props: SectionProps): JSX.Element | null {
                                 >
                                   {storedLimit?.image === false ? '—' : '✓'}
                                 </span>
+                              )}
+                        </td>
+                        <td style={{ whiteSpace: 'nowrap' }}>
+                          {selectedModels.has(model.id)
+                            ? (
+                                <button
+                                  type="button"
+                                  className="dshNewApiSettingsButton dshNewApiSettingsButtonSecondary"
+                                  disabled={busy}
+                                  title={t('removeFromChat')}
+                                  onClick={() => { void onToggleChat(model.id, false) }}
+                                >
+                                  {t('removeFromChat')}
+                                </button>
+                              )
+                            : (
+                                <button
+                                  type="button"
+                                  className="dshNewApiSettingsButton"
+                                  disabled={busy || !configured}
+                                  title={t('addToChat')}
+                                  onClick={() => { void onToggleChat(model.id, true) }}
+                                >
+                                  {t('addToChat')}
+                                </button>
                               )}
                         </td>
                         <td style={{ whiteSpace: 'nowrap' }}>

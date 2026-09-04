@@ -36,9 +36,11 @@ export interface NewApiToken {
   /** Quota remaining for this token; NewAPI uses -1 to mean "unlimited, draw from user quota". */
   quota?: number
   used_quota?: number
-  /** Unix milliseconds. */
+  /** Unix seconds (new-api emits Go `time.Unix()` values; the client multiplies by 1000 for display). */
   created_time?: number
+  /** Unix seconds. */
   accessed_time?: number
+  /** Unix seconds; -1 (or any non-positive value) means "never expires". */
   expired_time?: number
   /** Comma-separated model list, or -1 meaning "all models the user group can access". */
   models?: string

@@ -152,10 +152,13 @@ check('models.sync without a key fails', keylessSync.ok === false && keylessSync
 check('failed sync leaves the route hidden', llmStore.providers.newapi === undefined)
 
 // 6. With the key back, models.sync rebuilds the route from the persisted
-//    snapshot cache and clears the stash.
+//    snapshot cache and clears the stash. Only models the user selected ride
+//    the route, so select both cached models first.
 credentialsStore.set('NEWAPI_API_KEY', 'sk-live')
 fire('NEWAPI_API_KEY')
 await sleep(150)
+check('models.setSelected persists and re-syncs', (await call('models.setSelected', { id: 'gpt-x', selected: true })).ok === true
+  && (await call('models.setSelected', { id: 'gpt-y', selected: true })).ok === true)
 const synced = await call('models.sync', {})
 check('models.sync with a key succeeds offline from the cache', synced.ok === true && synced.value.count === 2)
 const syncedRoute = llmStore.providers.newapi

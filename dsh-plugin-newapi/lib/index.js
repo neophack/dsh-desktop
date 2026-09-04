@@ -484,6 +484,13 @@ var Config = z.object({
    */
   modelLimits: z.string().default("{}"),
   /**
+   * JSON string array of model ids the user explicitly added to the chat
+   * selector (schemastery has no array-of-strings convenience here, hence the
+   * string). Empty by default: NO model is offered in chat until the user
+   * adds it, and a removed id drops out of the selector on the next sync.
+   */
+  selectedModels: z.string().default("[]"),
+  /**
    * Context window (tokens) applied to every synced model that has no explicit
    * per-model limit; 0 disables the default. Users can change and save it.
    */
@@ -538,6 +545,16 @@ function readModelLimits(raw) {
     return limits;
   } catch {
     return {};
+  }
+}
+function readSelectedModels(raw) {
+  if (typeof raw !== "string" || raw === "") return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((id) => typeof id === "string" && id.trim() !== "");
+  } catch {
+    return [];
   }
 }
 function readStashedRoute(raw) {
@@ -755,6 +772,7 @@ function apply(ctx, config = {}) {
   async function startNativeLogin(baseUrlRaw) {
     clearNativeLogin();
     const baseUrl = normalizeBaseUrl(baseUrlRaw);
+    if (baseUrl === "") return fail("invalid-argument", "baseUrl must be a valid http(s) URL");
     let info;
     try {
       info = await getServerInfoCached(baseUrl);
@@ -1009,6 +1027,10 @@ function apply(ctx, config = {}) {
       return ok(redactUser(await snapshotClientFor(baseUrl, credential).getUser(signal)));
     } catch (error) {
       if (error instanceof NewApiError && error.status === 429) rateLimitedUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
+      if (error instanceof NewApiError && error.status === 401) {
+        await signOutDeadCredential();
+        return fail("token-expired", "the access token was replaced on the server (another sign-in or a web regeneration); signed out \u2014 please sign in again");
+      }
       if (cachedUser !== void 0) return ok(cachedUser);
       return fail("fetch-failed", describeError(error));
     }
@@ -1062,6 +1084,7 @@ function apply(ctx, config = {}) {
         passwordLogin: currentPasswordLogin(),
         currency: currentCurrency(),
         modelLimits: readModelLimits(storedConfig.modelLimits),
+        selectedModels: readSelectedModels(storedConfig.selectedModels),
         defaultContextWindow: currentDefaultContextWindow(),
         authKind: storedConfig.authKind ?? "",
         /** Masked head+tail of the cached system access token; only with token auth. */
@@ -1100,7 +1123,9 @@ function apply(ctx, config = {}) {
     },
     /** Server capabilities for a (possibly unsaved) base URL; no auth needed. */
     "server.status": async (payload, signal) => {
-      const fromPayload = readBaseUrl(payload);
+      const raw = readBaseUrl(payload);
+      const fromPayload = raw === "" ? "" : normalizeBaseUrl(raw);
+      if (raw !== "" && fromPayload === "") return fail("invalid-argument", "baseUrl must be a valid http(s) URL");
       const baseUrl = fromPayload !== "" ? fromPayload : currentBaseUrl();
       if (baseUrl === "") return fail("invalid-argument", "baseUrl is required");
       try {
@@ -1147,6 +1172,7 @@ function apply(ctx, config = {}) {
         return fail("invalid-argument", "baseUrl, username and password are required");
       }
       const normalized = normalizeBaseUrl(baseUrl);
+      if (normalized === "") return fail("invalid-argument", "baseUrl must be a valid http(s) URL");
       const client = new NewApiClient({
         baseUrl: normalized,
         onSessionRotated: void 0
@@ -1227,7 +1253,7 @@ function apply(ctx, config = {}) {
       }
     },
     /**
-     * Sync models into the LLM catalog: writes the llm-pi-ai settings section
+     * Sync the SELECTED models into the LLM catalog: writes the llm-pi-ai settings section
      * `providers.<route>` so the shipped pi-ai adapter registers the chat
      * route. The token is *referenced* (apiKeyEnv), never copied. Stored
      * per-model limits (contextWindow / maxTokens) ride along on each entry
@@ -1255,9 +1281,18 @@ function apply(ctx, config = {}) {
       if (!result.ok) return result;
       const snapshot = result.value;
       if (snapshot.models.length === 0) return fail("no-models", "newapi returned no visible models");
+      const selected = new Set(readSelectedModels(stored().selectedModels));
+      const chosen = snapshot.models.filter((model) => selected.has(model.id));
+      if (chosen.length === 0) {
+        await removeRouteFromCatalog("no models selected");
+        if (stored().stashedRoute !== "") {
+          await scope.update({ stashedRoute: "" });
+        }
+        return ok({ route, count: 0, baseURL: `${currentBaseUrl().replace(/\/+$/, "")}/v1` });
+      }
       const limits = readModelLimits(stored().modelLimits);
       const defaultContextWindow = currentDefaultContextWindow();
-      const models = (limit === void 0 ? snapshot.models : snapshot.models.slice(0, limit)).map((model) => {
+      const models = (limit === void 0 ? chosen : chosen.slice(0, limit)).map((model) => {
         const { image: _image, ...storedLimits } = limits[model.id] ?? {};
         return {
           id: model.id,
@@ -1281,6 +1316,28 @@ function apply(ctx, config = {}) {
         await scope.update({ stashedRoute: "" });
       }
       return ok({ route, count: models.length, baseURL });
+    },
+    /**
+     * Add or remove one model from the chat selector: persists the selection
+     * (nothing is selected by default) and re-syncs immediately, so the chat
+     * model selector gains or drops the model without any further click.
+     */
+    "models.setSelected": async (payload) => {
+      const input = payload ?? {};
+      if (typeof input.id !== "string" || input.id === "") {
+        return fail("invalid-argument", "id is required");
+      }
+      const ids = readSelectedModels(stored().selectedModels);
+      const at = ids.indexOf(input.id);
+      const wanted = input.selected !== false;
+      if (wanted && at === -1) ids.push(input.id);
+      else if (!wanted && at !== -1) ids.splice(at, 1);
+      else return ok({ ids, synced: true });
+      await scope.update({ selectedModels: JSON.stringify(ids) });
+      logger.info(`newapi: ${wanted ? "added" : "removed"} model ${input.id} ${wanted ? "to" : "from"} the chat catalog`);
+      const synced = await endpoints["models.sync"]({}, void 0);
+      if (!synced.ok) logger.warn(`newapi: re-sync after changing the selection failed (${synced.error.code})`);
+      return ok({ ids, synced: synced.ok });
     },
     /**
      * Set (or clear, with non-positive/absent values) one model's capability
@@ -1492,6 +1549,13 @@ function readPasswordPayload(payload) {
 function normalizeBaseUrl(raw) {
   let value = raw.replace(/\/+$/, "");
   if (value.endsWith("/v1")) value = value.slice(0, -3).replace(/\/+$/, "");
+  if (value === "") return "";
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+  } catch {
+    return "";
+  }
   return value;
 }
 function readSyncLimit(payload) {

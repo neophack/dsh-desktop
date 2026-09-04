@@ -199,10 +199,14 @@ try {
   check('exactly one access-token generation for the login', accessTokensMinted === 1)
   check('chat api key persisted', credentialsStore.get('NEWAPI_API_KEY') === 'sk-full-key')
   const autoSynced = llmSettings.providers?.newapi
-  check('login auto-synced models to the chat catalog', autoSynced !== undefined
-    && autoSynced.baseURL === `${base}/v1`
-    && Array.isArray(autoSynced.models) && autoSynced.models.length === 2
-    && autoSynced.models.every((m) => typeof m.id === 'string'))
+  check('login auto-sync adds nothing while no model is selected', autoSynced === undefined)
+  // Models only reach the chat selector once the user adds them.
+  check('post-login model add syncs', (await call('models.setSelected', { id: 'gpt-x', selected: true })).ok === true)
+  const selectedRoute = llmSettings.providers?.newapi
+  check('added model rides the chat catalog', selectedRoute !== undefined
+    && selectedRoute.baseURL === `${base}/v1`
+    && Array.isArray(selectedRoute.models) && selectedRoute.models.length === 1
+    && selectedRoute.models[0]?.id === 'gpt-x')
   const stillOk = await status()
   check('ok STAYS observable until ack (regression)', stillOk.status === 'ok')
 
@@ -215,6 +219,15 @@ try {
     config.value.accessTokenMasked === 'pat-****cess'
       && config.value.accessTokenMasked !== storedCredential
       && !config.value.accessTokenMasked.includes(storedCredential.slice(4, -4)))
+
+  // Probe/save address handling: the OpenAI endpoint suffix and trailing
+  // slashes are tolerated, non-URL input is rejected instead of persisted.
+  const probedV1 = await call('server.status', { baseUrl: `${base}/v1/` })
+  check('server.status tolerates a pasted /v1 endpoint', probedV1.ok === true && probedV1.value.baseUrl === base)
+  const badProbe = await call('server.status', { baseUrl: 'not-a-url' })
+  check('server.status rejects a non-URL address', badProbe.ok === false && badProbe.error.message.includes('valid http'))
+  const badSet = await call('config.set', { baseUrl: 'not a url' })
+  check('config.set rejects a non-URL address (nothing persisted)', badSet.ok === false && settingsStore.baseUrl === base)
 
   // 4a. Post-login reads (usage snapshot) authenticate with the cached access
   //     token: no cookie construction, no /api/user/auth/refresh exchange.
@@ -286,6 +299,18 @@ try {
     check('startup kept other providers', freshLlm.providers?.other !== undefined)
   }
 
+  // 4d. The footer identity path applies the same 401 policy: with an empty
+  //     snapshot cache (config.clear above dropped it), user.get hits the
+  //     server, and a dead stored token signs out there too — it must not
+  //     report a generic fetch failure while keeping the dead credential.
+  credentialsStore.set('NEWAPI_SESSION', 'pat-dead')
+  settingsStore.authKind = 'token'
+  const deadUser = await call('user.get')
+  check('user.get on a replaced token signs out too', deadUser.ok === false
+    && deadUser.error.message.includes('signed out'))
+  check('user.get sign-out cleared the console credential', credentialsStore.has('NEWAPI_SESSION') === false)
+  check('user.get sign-out reset authKind', settingsStore.authKind === '')
+
   // 5. Second flow: user closing the login window surfaces a cancel error.
   await call('login.native.start', { baseUrl: base })
   check('second window opened', electron.windows.length === 3)
@@ -301,8 +326,9 @@ try {
   const win3 = electron.windows[3]
   for (const dispose of disposers) dispose()
   check('dispose closes the pending window', win3.destroyed === true)
-  // The 401 sign-out is EXPECTED to warn once; nothing else may warn.
-  check('only the expected sign-out warning', warns.length === 1 && warns[0].includes('signed out'))
+  // The 401 sign-outs (snapshot path + user.get path) are EXPECTED to warn
+  // once each; nothing else may warn.
+  check('only the expected sign-out warnings', warns.length === 2 && warns.every((w) => w.includes('signed out')))
 } finally {
   await new Promise((resolve) => server.close(resolve))
 }

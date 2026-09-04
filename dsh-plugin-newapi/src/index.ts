@@ -94,6 +94,13 @@ const Config = z.object({
    */
   modelLimits: z.string().default('{}'),
   /**
+   * JSON string array of model ids the user explicitly added to the chat
+   * selector (schemastery has no array-of-strings convenience here, hence the
+   * string). Empty by default: NO model is offered in chat until the user
+   * adds it, and a removed id drops out of the selector on the next sync.
+   */
+  selectedModels: z.string().default('[]'),
+  /**
    * Context window (tokens) applied to every synced model that has no explicit
    * per-model limit; 0 disables the default. Users can change and save it.
    */
@@ -161,6 +168,8 @@ interface StoredConfig {
   currency?: string
   /** JSON string: Record<modelId, { contextWindow?: number, maxTokens?: number }>. */
   modelLimits?: string
+  /** JSON string array: model ids explicitly added to the chat selector. */
+  selectedModels?: string
   defaultContextWindow?: number
   /** JSON string: the llm-pi-ai route profile hidden while the chat key is missing. */
   stashedRoute?: string
@@ -196,6 +205,18 @@ function readModelLimits(raw: string | undefined): ModelLimits {
     return limits
   } catch {
     return {}
+  }
+}
+
+/** Parse the stored ids of models the user added to the chat selector; corrupt values collapse to none. */
+function readSelectedModels(raw: string | undefined): string[] {
+  if (typeof raw !== 'string' || raw === '') return []
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((id): id is string => typeof id === 'string' && id.trim() !== '')
+  } catch {
+    return []
   }
 }
 
@@ -458,9 +479,10 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
       // The session already gives plan/usage data; only chat needs the key.
       logger.warn(`newapi: ensuring the API key failed: ${describeError(error)}`)
     }
-    // Sync models right away so the chat model selector gains the NewAPI
-    // provider group without a manual "sync" click; failures are non-fatal
-    // (the settings page still offers a manual retry).
+    // Sync the selection right away so the chat model selector gains the
+    // models the user previously added without a manual "sync" click; the
+    // default selection is empty, so a first login adds nothing. Failures are
+    // non-fatal (the settings page still offers a manual retry).
     try {
       const result = await endpoints['models.sync']({}, undefined)
       logger.info(result.ok
@@ -595,6 +617,7 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
     // until this replacement clears it — the new attempt takes over).
     clearNativeLogin()
     const baseUrl = normalizeBaseUrl(baseUrlRaw)
+    if (baseUrl === '') return fail('invalid-argument', 'baseUrl must be a valid http(s) URL')
     let info: NewApiServerInfo
     try {
       // Reuse the server.status probe cache instead of a fresh /api/status
@@ -956,6 +979,13 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
       return ok(redactUser(await snapshotClientFor(baseUrl, credential).getUser(signal)))
     } catch (error) {
       if (error instanceof NewApiError && error.status === 429) rateLimitedUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS
+      // Same policy as the snapshot path: a 401 means the stored credential
+      // was replaced server-side — sign out instead of serving the cached
+      // identity on a credential that can never work again.
+      if (error instanceof NewApiError && error.status === 401) {
+        await signOutDeadCredential()
+        return fail('token-expired', 'the access token was replaced on the server (another sign-in or a web regeneration); signed out — please sign in again')
+      }
       // Offline: keep the footer identity on the last known user instead of
       // dropping back to the "sign in" label.
       if (cachedUser !== undefined) return ok(cachedUser)
@@ -1029,6 +1059,7 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
         passwordLogin: currentPasswordLogin(),
         currency: currentCurrency(),
         modelLimits: readModelLimits(storedConfig.modelLimits),
+        selectedModels: readSelectedModels(storedConfig.selectedModels),
         defaultContextWindow: currentDefaultContextWindow(),
         authKind: storedConfig.authKind ?? '',
         /** Masked head+tail of the cached system access token; only with token auth. */
@@ -1070,7 +1101,9 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
 
     /** Server capabilities for a (possibly unsaved) base URL; no auth needed. */
     'server.status': async (payload, signal) => {
-      const fromPayload = readBaseUrl(payload)
+      const raw = readBaseUrl(payload)
+      const fromPayload = raw === '' ? '' : normalizeBaseUrl(raw)
+      if (raw !== '' && fromPayload === '') return fail('invalid-argument', 'baseUrl must be a valid http(s) URL')
       const baseUrl = fromPayload !== '' ? fromPayload : currentBaseUrl()
       if (baseUrl === '') return fail('invalid-argument', 'baseUrl is required')
       // Probes fire on every settings-page mount; serve a short cache instead
@@ -1123,6 +1156,7 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
         return fail('invalid-argument', 'baseUrl, username and password are required')
       }
       const normalized = normalizeBaseUrl(baseUrl)
+      if (normalized === '') return fail('invalid-argument', 'baseUrl must be a valid http(s) URL')
       const client = new NewApiClient({
         baseUrl: normalized,
         onSessionRotated: undefined,
@@ -1214,7 +1248,7 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
     },
 
     /**
-     * Sync models into the LLM catalog: writes the llm-pi-ai settings section
+     * Sync the SELECTED models into the LLM catalog: writes the llm-pi-ai settings section
      * `providers.<route>` so the shipped pi-ai adapter registers the chat
      * route. The token is *referenced* (apiKeyEnv), never copied. Stored
      * per-model limits (contextWindow / maxTokens) ride along on each entry
@@ -1247,9 +1281,24 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
       if (!result.ok) return result
       const snapshot = result.value
       if (snapshot.models.length === 0) return fail('no-models', 'newapi returned no visible models')
+      // Only models the user explicitly added ride the route: the chat
+      // selector must offer exactly the usable set, never the gateway's
+      // whole catalog.
+      const selected = new Set(readSelectedModels(stored().selectedModels))
+      const chosen = snapshot.models.filter((model) => selected.has(model.id))
+      if (chosen.length === 0) {
+        // Nothing selected: drop any route an earlier sync wrote (e.g. from a
+        // pre-selection version) so the selector goes quiet, and clear the
+        // stash so a later key round-trip cannot resurrect it.
+        await removeRouteFromCatalog('no models selected')
+        if (stored().stashedRoute !== '') {
+          await scope.update({ stashedRoute: '' } satisfies { stashedRoute: string })
+        }
+        return ok({ route, count: 0, baseURL: `${currentBaseUrl().replace(/\/+$/, '')}/v1` })
+      }
       const limits = readModelLimits(stored().modelLimits)
       const defaultContextWindow = currentDefaultContextWindow()
-      const models = (limit === undefined ? snapshot.models : snapshot.models.slice(0, limit)).map((model) => {
+      const models = (limit === undefined ? chosen : chosen.slice(0, limit)).map((model) => {
         // `image` is plugin-side state, not an llm-pi-ai model field; it rides
         // the entry below as the explicit `input` modality list instead.
         const { image: _image, ...storedLimits } = limits[model.id] ?? {}
@@ -1280,6 +1329,31 @@ export function apply(ctx: Context, config: PluginConfig = {}): void {
         await scope.update({ stashedRoute: '' } satisfies { stashedRoute: string })
       }
       return ok({ route, count: models.length, baseURL })
+    },
+
+    /**
+     * Add or remove one model from the chat selector: persists the selection
+     * (nothing is selected by default) and re-syncs immediately, so the chat
+     * model selector gains or drops the model without any further click.
+     */
+    'models.setSelected': async (payload) => {
+      const input = (payload ?? {}) as { id?: unknown, selected?: unknown }
+      if (typeof input.id !== 'string' || input.id === '') {
+        return fail('invalid-argument', 'id is required')
+      }
+      const ids = readSelectedModels(stored().selectedModels)
+      const at = ids.indexOf(input.id)
+      const wanted = input.selected !== false
+      if (wanted && at === -1) ids.push(input.id)
+      else if (!wanted && at !== -1) ids.splice(at, 1)
+      else return ok({ ids, synced: true })
+      await scope.update({ selectedModels: JSON.stringify(ids) } as { baseUrl?: string, authKind?: string, passwordLogin?: string, currency?: string, modelLimits?: string, selectedModels?: string })
+      logger.info(`newapi: ${wanted ? 'added' : 'removed'} model ${input.id} ${wanted ? 'to' : 'from'} the chat catalog`)
+      // Apply right away so the selector reflects the change; a sync failure
+      // leaves the selection stored for the next sync (e.g. after login).
+      const synced = await endpoints['models.sync']({}, undefined)
+      if (!synced.ok) logger.warn(`newapi: re-sync after changing the selection failed (${synced.error.code})`)
+      return ok({ ids, synced: synced.ok })
     },
 
     /**
@@ -1608,11 +1682,20 @@ function readPasswordPayload(payload: unknown): { baseUrl: string, username: str
 /**
  * Normalize a user-entered console URL: tolerate a trailing `/v1` (copied from
  * the OpenAI-compatible endpoint) and trailing slashes. Management endpoints
- * always live directly under `<origin>/api`.
+ * always live directly under `<origin>/api`. Returns '' for anything that is
+ * not a valid absolute http(s) URL, so callers can reject garbage input
+ * instead of persisting an address every later call fails on.
  */
 function normalizeBaseUrl(raw: string): string {
   let value = raw.replace(/\/+$/, '')
   if (value.endsWith('/v1')) value = value.slice(0, -3).replace(/\/+$/, '')
+  if (value === '') return ''
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return ''
+  } catch {
+    return ''
+  }
   return value
 }
 
