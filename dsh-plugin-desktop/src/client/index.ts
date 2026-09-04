@@ -13,6 +13,7 @@ import { applyDesktopSettings } from './desktop-settings.ts'
 import { installDesktopDirectoryPickerBridge } from './directory-picker.ts'
 import { parseDesktopClientEnvironment } from './environment.ts'
 import { applyExtendedShell, applyFramedShell } from './extended-shell.ts'
+import { applyDeepSeekProviderDelete } from './deepseek-provider-delete.tsx'
 import { applyDeepSeekOnboardingSuppression } from './suppress-deepseek-onboarding.ts'
 import { desktopWindowService, provideDesktopWindow } from './window-service.ts'
 
@@ -91,6 +92,10 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(
     () => applyDeepSeekOnboardingSuppression(ctx),
     'dsh-plugin-desktop: suppress the official-DeepSeek key onboarding step',
+  )
+  ctx.effect(
+    () => applyDeepSeekProviderDelete(ctx),
+    'dsh-plugin-desktop: delete affordance for the official DeepSeek provider row',
   )
   ctx.effect(
     () => startRendererBootReporter(ctx.loader),
