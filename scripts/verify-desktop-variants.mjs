@@ -18,6 +18,7 @@ const allowedDifferences = new Set([
   'desktop-plugins.ts',
   'desktop-terminal.ts',
   'diagnostic-export-worker.ts',
+  'electron-shell-generation.ts',
   'index.ts',
   'main.ts',
   'native-ui/setup-wizard/App.tsx',
