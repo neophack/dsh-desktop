@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { delimiter, dirname, join } from 'node:path'
+import { delimiter, dirname, isAbsolute, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   formatRecoveryPluginRemoveFailure,
@@ -71,6 +71,60 @@ describe('pre-Host recovery plugin uninstall command', () => {
     expect(environment.PATH).toBe(`${options.nodeBinDir};${options.pnpmBinDir};${systemBin}`)
     expect(environment).not.toHaveProperty('Path')
     expect(environment.KEEP).toBe('value')
+  })
+
+  it('pins an absolute ComSpec on win32 even when the caller environment omits it', () => {
+    const options = fixture('')
+    const systemBin = join(dirname(options.profileDir), 'system-bin')
+    // No COMSPEC/SystemRoot/windir at all: the minimal "hostile" environment
+    // this function is meant to survive. Without a pinned ComSpec, any
+    // downstream `shell: true` grandchild spawn (the official dsh CLI's own
+    // pnpm invocation) fails to locate cmd.exe, since this environment's
+    // PATH deliberately excludes System32.
+    const environment = recoveryPluginEnvironment({
+      ...options,
+      environment: { PATH: systemBin },
+    }, 'win32')
+
+    expect(environment.ComSpec).toBeDefined()
+    expect(isAbsolute(environment.ComSpec ?? '')).toBe(true)
+    expect(environment.ComSpec?.toLowerCase()).toContain('cmd.exe')
+  })
+
+  it('preserves a caller-supplied ComSpec instead of overriding it', () => {
+    const options = fixture('')
+    const systemBin = join(dirname(options.profileDir), 'system-bin')
+    const customComSpec = 'D:\\Custom\\shell.exe'
+    const environment = recoveryPluginEnvironment({
+      ...options,
+      environment: { PATH: systemBin, ComSpec: customComSpec },
+    }, 'win32')
+
+    expect(environment.ComSpec).toBe(customComSpec)
+  })
+
+  it('resolves a case-insensitive COMSPEC override without leaving a duplicate key', () => {
+    const options = fixture('')
+    const systemBin = join(dirname(options.profileDir), 'system-bin')
+    const customComSpec = 'D:\\Custom\\shell.exe'
+    const environment = recoveryPluginEnvironment({
+      ...options,
+      environment: { PATH: systemBin, COMSPEC: customComSpec },
+    }, 'win32')
+
+    expect(environment.ComSpec).toBe(customComSpec)
+    expect(environment).not.toHaveProperty('COMSPEC')
+  })
+
+  it('does not project a ComSpec on non-Windows platforms', () => {
+    const options = fixture('')
+    const systemBin = join(dirname(options.profileDir), 'system-bin')
+    const environment = recoveryPluginEnvironment({
+      ...options,
+      environment: { PATH: systemBin },
+    }, 'linux')
+
+    expect(environment).not.toHaveProperty('ComSpec')
   })
 
   it('runs the packaged official dsh plugin remove argv for the selected Profile', async () => {

@@ -1,7 +1,7 @@
 /** Run the official DSH plugin-removal flow before the Cordis Host starts. */
 
 import { execFile } from 'node:child_process'
-import { isAbsolute } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { assertDesktopProfileName } from './profile-manager.ts'
 import { PNPM_IGNORE_MINIMUM_RELEASE_AGE } from './pnpm-policy.ts'
 
@@ -56,10 +56,39 @@ function assertAbsolutePath(label: string, value: string): void {
   }
 }
 
+/** Case-insensitive env lookup: Windows env keys survive with arbitrary casing (`Path`, `COMSPEC`, ...). */
+function inheritedByKey(environment: NodeJS.ProcessEnv, name: string): string | undefined {
+  const value = Object.entries(environment).find(([key]) => key.toUpperCase() === name)?.[1]
+  return value !== undefined && value.length > 0 ? value : undefined
+}
+
 function inheritedPath(environment: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
   const exact = environment.PATH
   if (exact !== undefined || platform !== 'win32') return exact ?? ''
-  return Object.entries(environment).find(([key]) => key.toUpperCase() === 'PATH')?.[1] ?? ''
+  return inheritedByKey(environment, 'PATH') ?? ''
+}
+
+/**
+ * Resolve an absolute `cmd.exe` regardless of what the caller-supplied
+ * environment carries. `shell: true` on win32 (used by the official `dsh`
+ * CLI's own pnpm invocation) locates the shell via `ComSpec` on the
+ * *spawned* process's own environment, falling back to a bare `cmd.exe`
+ * PATH lookup when it is absent — and this environment's PATH deliberately
+ * excludes System32. Without a pinned ComSpec, that grandchild spawn fails
+ * with a `cmd.exe` ENOENT that pnpm's caller then misreports as "pnpm not
+ * found on PATH", masking the real cause.
+ */
+function resolveComSpec(callerEnvironment: NodeJS.ProcessEnv): string {
+  const fromCaller = inheritedByKey(callerEnvironment, 'COMSPEC')
+  if (fromCaller !== undefined) return fromCaller
+  const fromProcess = inheritedByKey(process.env, 'COMSPEC')
+  if (fromProcess !== undefined) return fromProcess
+  const systemRoot = inheritedByKey(callerEnvironment, 'SYSTEMROOT')
+    ?? inheritedByKey(process.env, 'SYSTEMROOT')
+    ?? inheritedByKey(callerEnvironment, 'WINDIR')
+    ?? inheritedByKey(process.env, 'WINDIR')
+    ?? String.raw`C:\Windows`
+  return join(systemRoot, 'System32', 'cmd.exe')
 }
 
 /** Build the fixed Desktop command environment used after Host quiescence. */
@@ -73,16 +102,18 @@ export function recoveryPluginEnvironment(
     | 'environment'>,
   platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
-  const environment = { ...(options.environment ?? process.env) }
+  const callerEnvironment = options.environment ?? process.env
+  const environment = { ...callerEnvironment }
   if (platform === 'win32') {
     for (const key of Object.keys(environment)) {
-      if (key.toUpperCase() === 'PATH') delete environment[key]
+      if (key.toUpperCase() === 'PATH' || key.toUpperCase() === 'COMSPEC') delete environment[key]
     }
   }
-  const path = inheritedPath(options.environment ?? process.env, platform)
+  const path = inheritedPath(callerEnvironment, platform)
   environment.PATH = [options.nodeBinDir, options.pnpmBinDir, path]
     .filter(value => value.length > 0)
     .join(platform === 'win32' ? ';' : ':')
+  if (platform === 'win32') environment.ComSpec = resolveComSpec(callerEnvironment)
   environment.NODE = options.nodeShimPath
   environment.ELECTRON_RUN_AS_NODE = '1'
   environment.DSH_HOME = options.homeDir
