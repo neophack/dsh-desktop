@@ -6,22 +6,16 @@ import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import {
   compareSemVerVersions,
-  DESKTOP_RELEASE_CHANNEL_HEADER,
+  desktopReleaseRequestHeaders,
+  desktopReleaseTagEndpoint,
+  MAX_RELEASE_RESPONSE_BYTES,
   parseSemVer,
+  readBoundedResponseText,
   type DesktopReleaseChannel,
 } from './update-checker.ts'
 
-/** Desktop platforms with a fixed installer download endpoint. */
+/** Desktop platforms with a published installer release asset. */
 export type DesktopDownloadPlatform = 'darwin' | 'win32'
-
-/** Fixed download endpoints that record one user-confirmed installer download. */
-export const DESKTOP_DOWNLOAD_URLS: Readonly<Record<DesktopDownloadPlatform, string>> = {
-  darwin: 'https://www.dshdesktop.cn/api/downloads/mac',
-  win32: 'https://www.dshdesktop.cn/api/downloads/windows',
-}
-
-/** Header pinning a download request and response to the checked release. */
-export const DESKTOP_TARGET_VERSION_HEADER = 'X-DSH-Desktop-Target-Version'
 
 /** Maximum accepted installer size, in bytes. */
 export const MAX_UPDATE_DOWNLOAD_BYTES = 1024 * 1024 * 1024
@@ -119,14 +113,13 @@ export async function downloadDesktopUpdate(options: DownloadDesktopUpdateOption
   const paths = await prepareDownloadPaths(destinationPath)
   throwIfAborted(options.signal)
 
+  const assetUrl = await resolveDesktopUpdateAssetUrl(options, platform)
+  throwIfAborted(options.signal)
+
   let response: Response
   try {
-    response = await options.request(DESKTOP_DOWNLOAD_URLS[platform], {
+    response = await options.request(assetUrl, {
       method: 'GET',
-      headers: {
-        [DESKTOP_RELEASE_CHANNEL_HEADER]: channel,
-        [DESKTOP_TARGET_VERSION_HEADER]: options.version,
-      },
       cache: 'no-store',
       redirect: 'follow',
       ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -143,7 +136,6 @@ export async function downloadDesktopUpdate(options: DownloadDesktopUpdateOption
       { status: response.status },
     )
   }
-  assertReleaseResponse(response, channel, options.version)
   if (response.body === null) {
     throw new UpdateDownloadError('empty-body', 'The update download service returned an empty body.')
   }
@@ -283,17 +275,90 @@ function validatedReleaseVersion(version: string): string {
   return version
 }
 
-function assertReleaseResponse(
-  response: Response,
-  channel: DesktopReleaseChannel,
-  version: string,
-): void {
-  const responseChannel = response.headers.get(DESKTOP_RELEASE_CHANNEL_HEADER)
-  const responseVersion = response.headers.get(DESKTOP_TARGET_VERSION_HEADER)
-  if (channel === 'stable' && responseChannel === null && responseVersion === null) return
-  if (responseChannel !== channel || responseVersion !== version) {
-    throw new UpdateDownloadError('invalid-artifact', 'The update service returned a different release channel or version.')
+/**
+ * Resolve the installer asset URL for one checked release version.
+ * @param options - Validated download options carrying the version, request, and cancellation signal.
+ * @param platform - Validated platform selecting the installer asset extension.
+ * @returns The GitHub release asset URL pinned to the requested version.
+ * @throws {UpdateDownloadError} When the release document is unreachable, unreadable, or carries no unambiguous installer asset.
+ */
+async function resolveDesktopUpdateAssetUrl(
+  options: DownloadDesktopUpdateOptions,
+  platform: DesktopDownloadPlatform,
+): Promise<string> {
+  let response: Response
+  try {
+    response = await options.request(desktopReleaseTagEndpoint(options.version), {
+      method: 'GET',
+      headers: desktopReleaseRequestHeaders(),
+      cache: 'no-store',
+      redirect: 'follow',
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    })
+  } catch (cause) {
+    if (options.signal?.aborted === true || isAbortFailure(cause)) throw aborted(cause)
+    throw new UpdateDownloadError('network', 'The update release could not be resolved.', { cause })
   }
+
+  if (response.status !== 200) {
+    throw new UpdateDownloadError(
+      'http-status',
+      `The update release service returned HTTP ${String(response.status)}.`,
+      { status: response.status },
+    )
+  }
+
+  let body: string
+  try {
+    body = await readBoundedResponseText(response, MAX_RELEASE_RESPONSE_BYTES)
+  } catch (cause) {
+    throw new UpdateDownloadError('invalid-artifact', 'The update release document is unreadable.', { cause })
+  }
+  const assetUrl = releaseInstallerAssetUrl(body, options.version, platform)
+  if (assetUrl === undefined) {
+    throw new UpdateDownloadError('invalid-artifact', 'The update release does not carry the requested installer.')
+  }
+  return assetUrl
+}
+
+/**
+ * Select the installer asset of one release document for a platform.
+ * @param body - GitHub release document text.
+ * @param version - Canonical release version the document tag must match.
+ * @param platform - Platform selecting the `.dmg` or `.exe` asset.
+ * @returns The unique matching asset URL, preferring the expected architecture, or undefined.
+ */
+function releaseInstallerAssetUrl(
+  body: string,
+  version: string,
+  platform: DesktopDownloadPlatform,
+): string | undefined {
+  let value: unknown
+  try {
+    value = JSON.parse(body)
+  } catch {
+    return undefined
+  }
+  if (!isRecord(value) || typeof value.tag_name !== 'string' || !Array.isArray(value.assets)) {
+    return undefined
+  }
+  const tag = value.tag_name.startsWith('v') ? value.tag_name.slice(1) : value.tag_name
+  if (tag !== version) return undefined
+
+  const extension = platform === 'darwin' ? '.dmg' : '.exe'
+  const matches: Array<{ readonly name: string, readonly url: string }> = []
+  for (const entry of value.assets) {
+    if (!isRecord(entry)
+      || typeof entry.name !== 'string'
+      || typeof entry.browser_download_url !== 'string') continue
+    if (entry.name.toLowerCase().endsWith(extension)) {
+      matches.push({ name: entry.name, url: entry.browser_download_url })
+    }
+  }
+  if (matches.length === 1) return matches[0]!.url
+  const architecture = platform === 'darwin' ? '-universal' : '-x64-'
+  const preferred = matches.filter(match => match.name.includes(architecture))
+  return preferred.length === 1 ? preferred[0]!.url : undefined
 }
 
 function validatedUserDataPath(userDataPath: string): string {
@@ -529,6 +594,10 @@ function isAbortFailure(value: unknown): boolean {
       && value !== null
       && 'name' in value
       && value.name === 'AbortError'
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 async function unlinkIfPresent(filename: string): Promise<void> {

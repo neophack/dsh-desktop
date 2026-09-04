@@ -1,25 +1,19 @@
-/** Headless version checks against the public DSH Desktop release service. */
+/** Headless version checks against the public DSH Desktop GitHub releases. */
 
-import {
-  assertDesktopInstallationId,
-  DESKTOP_INSTALLATION_ID_HEADER,
-  type DesktopInstallationId,
-} from './desktop-installation-id.ts'
+/** GitHub repository that publishes the DSH Desktop update channel. */
+export const DESKTOP_RELEASE_REPOSITORY = 'neophack/dsh-desktop'
 
-/** Public endpoint returning the latest DSH Desktop version for a requested channel. */
-export const DESKTOP_VERSION_ENDPOINT = 'https://www.dshdesktop.cn/api/desktop/version'
+/** GitHub API endpoint returning the latest published stable release document. */
+export const DESKTOP_LATEST_RELEASE_ENDPOINT = `https://api.github.com/repos/${DESKTOP_RELEASE_REPOSITORY}/releases/latest`
 
-/** Header carrying the installed Desktop version to the fixed version endpoint. */
-export const DESKTOP_CURRENT_VERSION_HEADER = 'X-DSH-Desktop-Version'
+/** GitHub API endpoint listing recent releases, newest first, for Beta discovery. */
+export const DESKTOP_RELEASES_LIST_ENDPOINT = `https://api.github.com/repos/${DESKTOP_RELEASE_REPOSITORY}/releases?per_page=30`
 
-/** Header selecting an isolated Desktop release stream. */
-export const DESKTOP_RELEASE_CHANNEL_HEADER = 'X-DSH-Desktop-Channel'
+/** Maximum response body bytes accepted from one GitHub release document. */
+export const MAX_RELEASE_RESPONSE_BYTES = 1024 * 1024
 
-/** Release streams supported by the Desktop service. */
+/** Release streams supported by the Desktop release repository. */
 export type DesktopReleaseChannel = 'stable' | 'beta'
-
-/** Maximum response body bytes accepted from the version service. */
-export const MAX_VERSION_RESPONSE_BYTES = 4 * 1024
 
 /** Strictly parsed SemVer components. Numeric components remain strings to avoid overflow. */
 export interface ParsedSemVer {
@@ -44,7 +38,7 @@ export type UpdateRequest = (url: string, init: RequestInit) => Promise<Response
 export interface UpdateCheckOptions {
   /** Installed application version, expressed as canonical SemVer. */
   readonly currentVersion: string
-  /** Release stream that must be returned by the service. */
+  /** Release stream that must be discovered in the release repository. */
   readonly channel: DesktopReleaseChannel
   /** Channel of the installed application when explicitly switching streams. */
   readonly currentChannel?: DesktopReleaseChannel
@@ -54,17 +48,15 @@ export interface UpdateCheckOptions {
   readonly signal?: AbortSignal
   /** Optional fetch implementation for a host adapter or test. */
   readonly request?: UpdateRequest
-  /** Installation UUID attached only to the fixed version-check endpoint. */
-  readonly installationId?: DesktopInstallationId
 }
 
-/** Successful comparison returned by the stable version service. */
+/** Successful comparison returned by the release check. */
 export type UpdateCheckResult = {
-  /** Whether the service reports a version newer than the installed application. */
+  /** Whether the repository reports a version newer than the installed application. */
   readonly status: 'up-to-date' | 'update-available'
   /** Canonical installed version, including any prerelease identifiers. */
   readonly currentVersion: string
-  /** Canonical latest stable version returned by the service. */
+  /** Canonical latest version discovered for the requested channel. */
   readonly latestVersion: string
 }
 
@@ -108,7 +100,7 @@ export function compareSemVerVersions(left: string, right: string): number | nul
 }
 
 /**
- * Check the fixed DSH Desktop version endpoint for a release in one channel.
+ * Check the DSH Desktop GitHub releases for one channel.
  * @param options - installed version, caller-owned signal, and optional request adapter.
  * @returns a successful comparison, or null when any request or validation step fails.
  */
@@ -121,25 +113,21 @@ export async function checkForDesktopUpdate(
   )
   if (current === null) return null
 
-  let headers: HeadersInit
-  try {
-    headers = desktopVersionRequestHeaders(options.installationId, current.version, options.channel)
-  } catch {
-    return null
-  }
-
+  const endpoint = options.channel === 'beta'
+    ? DESKTOP_RELEASES_LIST_ENDPOINT
+    : DESKTOP_LATEST_RELEASE_ENDPOINT
   const init: RequestInit = {
     method: 'GET',
-    headers,
+    headers: desktopReleaseRequestHeaders(),
     cache: 'no-store',
-    redirect: 'error',
+    redirect: 'follow',
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   }
   const request = options.request ?? defaultRequest
 
   let response: Response
   try {
-    response = await request(DESKTOP_VERSION_ENDPOINT, init)
+    response = await request(endpoint, init)
   } catch {
     return null
   }
@@ -147,12 +135,14 @@ export async function checkForDesktopUpdate(
 
   let body: string
   try {
-    body = await readLimitedBody(response)
+    body = await readBoundedResponseText(response, MAX_RELEASE_RESPONSE_BYTES)
   } catch {
     return null
   }
 
-  const latest = parseVersionResponse(body, options.channel)
+  const latest = options.channel === 'beta'
+    ? latestBetaReleaseVersion(body)
+    : latestStableReleaseVersion(body)
   if (latest === null) return null
   const comparison = compareParsedSemVer(latest, current)
   return {
@@ -171,41 +161,36 @@ export function checkForStableUpdate(
   return checkForDesktopUpdate({ ...options, channel: 'stable' })
 }
 
-/** Build the complete header set for the fixed version-check request only. */
-export function desktopVersionRequestHeaders(
-  installationId?: string,
-  currentVersion?: string,
-  channel?: DesktopReleaseChannel,
-): Readonly<Record<string, string>> {
-  const headers: Record<string, string> = { Accept: 'application/json' }
-  if (channel !== undefined) headers[DESKTOP_RELEASE_CHANNEL_HEADER] = channel
-  if (currentVersion !== undefined) {
-    const parsed = channel === undefined
-      ? parseCanonicalChannelVersion(currentVersion, 'stable')
-      : parseCanonicalSupportedVersion(currentVersion)
-    if (parsed === null) {
-      throw new Error(channel === undefined
-        ? 'Desktop current version must be canonical stable SemVer.'
-        : 'Desktop current version must be canonical SemVer.')
-    }
-    headers[DESKTOP_CURRENT_VERSION_HEADER] = parsed.version
+/** Header set identifying the GitHub release API client; no Desktop identifiers are attached. */
+export function desktopReleaseRequestHeaders(): Readonly<Record<string, string>> {
+  return {
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    'User-Agent': 'DSH-Desktop-Update-Check',
   }
-  if (installationId !== undefined) {
-    headers[DESKTOP_INSTALLATION_ID_HEADER] = assertDesktopInstallationId(installationId)
-  }
-  return headers
 }
 
-async function defaultRequest(url: string, init: RequestInit): Promise<Response> {
-  return globalThis.fetch(url, init)
+/**
+ * Build the GitHub API endpoint returning one release document by its `v`-prefixed tag.
+ * @param version - canonical release version whose document is requested.
+ * @returns the fixed tag endpoint URL.
+ */
+export function desktopReleaseTagEndpoint(version: string): string {
+  return `https://api.github.com/repos/${DESKTOP_RELEASE_REPOSITORY}/releases/tags/v${version}`
 }
 
-async function readLimitedBody(response: Response): Promise<string> {
+/**
+ * Read one response body completely while enforcing a byte bound on declared and streamed length.
+ * @param response - response whose body is read as UTF-8 text.
+ * @param maxBytes - maximum accepted body size in bytes.
+ * @returns the decoded body text.
+ */
+export async function readBoundedResponseText(response: Response, maxBytes: number): Promise<string> {
   const declaredLength = response.headers.get('content-length')
   if (declaredLength !== null
     && /^[0-9]+$/u.test(declaredLength)
-    && BigInt(declaredLength) > BigInt(MAX_VERSION_RESPONSE_BYTES)) {
-    throw new Error('version response is too large')
+    && BigInt(declaredLength) > BigInt(maxBytes)) {
+    throw new Error('response body is too large')
   }
 
   if (response.body === null) return ''
@@ -218,9 +203,9 @@ async function readLimitedBody(response: Response): Promise<string> {
       const chunk = await reader.read()
       if (chunk.done) break
       bytesRead += chunk.value.byteLength
-      if (bytesRead > MAX_VERSION_RESPONSE_BYTES) {
+      if (bytesRead > maxBytes) {
         await reader.cancel().catch(() => undefined)
-        throw new Error('version response is too large')
+        throw new Error('response body is too large')
       }
       body += decoder.decode(chunk.value, { stream: true })
     }
@@ -230,17 +215,41 @@ async function readLimitedBody(response: Response): Promise<string> {
   }
 }
 
-function parseVersionResponse(body: string, expectedChannel: DesktopReleaseChannel): ParsedSemVer | null {
+async function defaultRequest(url: string, init: RequestInit): Promise<Response> {
+  return globalThis.fetch(url, init)
+}
+
+function latestStableReleaseVersion(body: string): ParsedSemVer | null {
   let value: unknown
   try {
     value = JSON.parse(body)
   } catch {
     return null
   }
-  if (!isRecord(value) || typeof value.version !== 'string') return null
-  if (expectedChannel === 'beta' && value.channel !== 'beta') return null
-  if (value.channel !== undefined && value.channel !== expectedChannel) return null
-  return parseCanonicalChannelVersion(value.version, expectedChannel)
+  if (!isRecord(value) || typeof value.tag_name !== 'string') return null
+  return parseReleaseTag(value.tag_name, 'stable')
+}
+
+function latestBetaReleaseVersion(body: string): ParsedSemVer | null {
+  let value: unknown
+  try {
+    value = JSON.parse(body)
+  } catch {
+    return null
+  }
+  if (!Array.isArray(value)) return null
+  let latest: ParsedSemVer | null = null
+  for (const entry of value) {
+    if (!isRecord(entry) || entry.draft === true || typeof entry.tag_name !== 'string') continue
+    const parsed = parseReleaseTag(entry.tag_name, 'beta')
+    if (parsed === null) continue
+    if (latest === null || compareParsedSemVer(parsed, latest) > 0) latest = parsed
+  }
+  return latest
+}
+
+function parseReleaseTag(tag: string, channel: DesktopReleaseChannel): ParsedSemVer | null {
+  return parseCanonicalChannelVersion(tag.startsWith('v') ? tag.slice(1) : tag, channel)
 }
 
 function parseCanonicalChannelVersion(
@@ -255,11 +264,6 @@ function parseCanonicalChannelVersion(
     && isNumeric(parsed.prerelease[1]!)
     ? parsed
     : null
-}
-
-function parseCanonicalSupportedVersion(input: string): ParsedSemVer | null {
-  return parseCanonicalChannelVersion(input, 'stable')
-    ?? parseCanonicalChannelVersion(input, 'beta')
 }
 
 function parseCanonicalVersion(input: string): ParsedSemVer | null {

@@ -192,9 +192,6 @@ class DesktopUpdateLifecycleOwner implements DesktopUpdateLifecycle {
           channel,
           currentChannel: this.options.adapter.releaseChannel ?? 'stable',
           allowDowngrade,
-          ...(this.options.adapter.installationId === undefined
-            ? {}
-            : { installationId: this.options.adapter.installationId }),
           signal: controller.signal,
           request: this.options.adapter.request,
         })

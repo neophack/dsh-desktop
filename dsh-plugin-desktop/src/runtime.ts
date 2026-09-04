@@ -2,7 +2,6 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { DesktopRendererAccessHeader } from './desktop-browser-access.ts'
 import type { RendererBootReport } from './renderer-boot-contract.ts'
 import type { DesktopReleaseChannel, UpdateCheckResult, UpdateRequest } from './update-checker.ts'
-import type { DesktopInstallationId } from './desktop-installation-id.ts'
 import type { ProfileCreateWindowOptions } from './profile-create-window.ts'
 import type {
   DesktopWindowMaterial,
@@ -109,8 +108,6 @@ export interface DesktopUpdateAdapter {
   readonly releaseChannel?: DesktopReleaseChannel
   /** Private file used to suppress repeated background update announcements. */
   readonly statePath: string
-  /** Pseudonymous installation UUID attached only to the fixed version endpoint. */
-  readonly installationId?: DesktopInstallationId
   /** Request adapter backed by Electron's native network session. */
   readonly request: UpdateRequest
   /** Ask whether one strictly newer version may be downloaded. */

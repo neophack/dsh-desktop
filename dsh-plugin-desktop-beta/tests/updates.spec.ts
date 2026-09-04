@@ -15,7 +15,8 @@ import type {
   DesktopTrayItem,
 } from '../src/runtime.ts'
 import {
-  DESKTOP_RELEASE_CHANNEL_HEADER,
+  DESKTOP_LATEST_RELEASE_ENDPOINT,
+  DESKTOP_RELEASES_LIST_ENDPOINT,
   type UpdateCheckResult,
 } from '../src/update-checker.ts'
 import { apply, Config, inject, type Config as UpdateConfig } from '../src/updates.ts'
@@ -27,8 +28,12 @@ const testConfig: UpdateConfig = {
   requestTimeoutMs: 1000,
 }
 
-function versionResponse(version: unknown): Response {
-  return Response.json({ version })
+function releaseResponse(tag: unknown): Response {
+  return Response.json({ tag_name: tag })
+}
+
+function releaseListResponse(tags: readonly unknown[]): Response {
+  return Response.json(tags.map(tag => ({ tag_name: tag })))
 }
 
 interface Harness {
@@ -91,7 +96,7 @@ async function createHarness(options: {
       ...(options.releaseChannel === undefined ? {} : { releaseChannel: options.releaseChannel }),
       statePath,
       canDownload: options.canDownload ?? true,
-      request: options.request ?? (async () => versionResponse('2.0.0')),
+      request: options.request ?? (async () => releaseResponse('2.0.0')),
       confirmDownload,
       showManualCheckResult,
       downloadAndOpen,
@@ -146,12 +151,9 @@ afterEach(() => {
 
 describe('desktop update Host plugin', () => {
   it('checks Beta automatically and installs an older stable release only through the explicit action', async () => {
-    const request = vi.fn(async (_url: string, init: RequestInit) => {
-      const channel = new Headers(init.headers).get(DESKTOP_RELEASE_CHANNEL_HEADER)
-      return Response.json(channel === 'beta'
-        ? { version: '2.0.5-beta.2', channel: 'beta' }
-        : { version: '2.0.4', channel: 'stable' })
-    })
+    const request = vi.fn(async (url: string) => url === DESKTOP_RELEASES_LIST_ENDPOINT
+      ? releaseListResponse(['v2.0.5-beta.2'])
+      : releaseResponse('v2.0.4'))
     const harness = await createHarness({
       releaseChannel: 'beta',
       currentVersion: '2.0.5-beta.2',
@@ -170,9 +172,9 @@ describe('desktop update Host plugin', () => {
       expect.any(AbortSignal),
       'stable',
     )
-    const channels = request.mock.calls.map(([, init]) => new Headers(init.headers).get(DESKTOP_RELEASE_CHANNEL_HEADER))
-    expect(channels).toContain('beta')
-    expect(channels).toContain('stable')
+    const endpoints = request.mock.calls.map(([url]) => url)
+    expect(endpoints).toContain(DESKTOP_RELEASES_LIST_ENDPOINT)
+    expect(endpoints).toContain(DESKTOP_LATEST_RELEASE_ENDPOINT)
     await harness.dispose()
   })
 
@@ -195,7 +197,7 @@ describe('desktop update Host plugin', () => {
     status,
     body,
   ) => {
-    const request = vi.fn(async () => versionResponse('2.0.0'))
+    const request = vi.fn(async () => releaseResponse('2.0.0'))
     const harness = await createHarness({ packaged: false, request })
     harness.requestRejection.mockReturnValue(status)
     const req = { headers: {} } as IncomingMessage
@@ -214,7 +216,7 @@ describe('desktop update Host plugin', () => {
   })
 
   it('passes an authenticated interactive update request to the existing route handler', async () => {
-    const request = vi.fn(async () => versionResponse('2.0.0'))
+    const request = vi.fn(async () => releaseResponse('2.0.0'))
     const harness = await createHarness({ packaged: false, request })
     const req = {
       method: 'POST',
@@ -260,7 +262,7 @@ describe('desktop update Host plugin', () => {
     { packaged: true, enabled: false },
   ])('reports a manual up-to-date result while automatic polling is disabled: %#', async ({ packaged, enabled }) => {
     vi.useFakeTimers()
-    const request = vi.fn(async () => versionResponse('2.0.0'))
+    const request = vi.fn(async () => releaseResponse('2.0.0'))
     const harness = await createHarness({
       packaged,
       request,
@@ -285,7 +287,7 @@ describe('desktop update Host plugin', () => {
 
   it('announces a background update once without opening a confirmation dialog', async () => {
     vi.useFakeTimers()
-    const request = vi.fn(async () => versionResponse('2.1.0'))
+    const request = vi.fn(async () => releaseResponse('2.1.0'))
     const harness = await createHarness({ request })
 
     await vi.advanceTimersByTimeAsync(testConfig.initialDelayMs)
@@ -321,7 +323,7 @@ describe('desktop update Host plugin', () => {
     const download = new Promise<void>(resolve => { resolveDownload = resolve })
     const harness = await createHarness({
       packaged: false,
-      request: async () => versionResponse('2.1.0'),
+      request: async () => releaseResponse('2.1.0'),
       confirmDownload: async () => true,
       downloadAndOpen: async () => download,
     })
@@ -348,7 +350,7 @@ describe('desktop update Host plugin', () => {
       .mockResolvedValueOnce(true)
     const harness = await createHarness({
       packaged: false,
-      request: async () => versionResponse('2.1.0'),
+      request: async () => releaseResponse('2.1.0'),
       confirmDownload,
     })
 
@@ -365,8 +367,8 @@ describe('desktop update Host plugin', () => {
 
   it('rechecks the version after confirmation and skips a rotated download', async () => {
     const request = vi.fn()
-      .mockResolvedValueOnce(versionResponse('2.1.0'))
-      .mockResolvedValueOnce(versionResponse('2.2.0'))
+      .mockResolvedValueOnce(releaseResponse('2.1.0'))
+      .mockResolvedValueOnce(releaseResponse('2.2.0'))
     const harness = await createHarness({
       packaged: false,
       request,
@@ -383,7 +385,7 @@ describe('desktop update Host plugin', () => {
   })
 
   it.each([
-    ['up-to-date', async () => versionResponse('2.0.0')],
+    ['up-to-date', async () => releaseResponse('2.0.0')],
     ['failed', async () => new Response('unavailable', { status: 503 })],
   ] as const)('keeps an automatic %s result silent', async (_case, request) => {
     vi.useFakeTimers()
@@ -399,13 +401,13 @@ describe('desktop update Host plugin', () => {
   })
 
   it.each([
-    ['same version', async () => versionResponse('2.0.0'), {
+    ['same version', async () => releaseResponse('2.0.0'), {
       status: 'up-to-date', currentVersion: '2.0.0', latestVersion: '2.0.0',
     }],
-    ['older version', async () => versionResponse('1.9.9'), {
+    ['older version', async () => releaseResponse('1.9.9'), {
       status: 'up-to-date', currentVersion: '2.0.0', latestVersion: '1.9.9',
     }],
-    ['invalid version', async () => versionResponse('v2.1.0'), null],
+    ['invalid release tag', async () => releaseResponse('v2.1.0-rc.1'), null],
     ['service unavailable', async () => new Response('unavailable', { status: 503 }), null],
     ['network failure', async () => { throw new TypeError('offline') }, null],
   ] as const)('reports a manual %s result without prompting or downloading', async (_case, request, expected) => {
@@ -424,7 +426,7 @@ describe('desktop update Host plugin', () => {
   it('silently resets invalid legacy state before announcing the available version', async () => {
     vi.useFakeTimers()
     const harness = await createHarness({
-      request: async () => versionResponse('2.1.0'),
+      request: async () => releaseResponse('2.1.0'),
       state: JSON.stringify({
         version: 1,
         checkedVersion: '2.0.0',
@@ -454,7 +456,7 @@ describe('desktop update Host plugin', () => {
   it('migrates v2 prompt history without repeating the same background announcement', async () => {
     vi.useFakeTimers()
     const harness = await createHarness({
-      request: async () => versionResponse('2.1.0'),
+      request: async () => releaseResponse('2.1.0'),
       state: JSON.stringify({ version: 2, lastPromptedVersion: '2.1.0' }),
     })
 
@@ -475,7 +477,7 @@ describe('desktop update Host plugin', () => {
     const harness = await createHarness({
       packaged: false,
       canDownload: false,
-      request: async () => versionResponse('2.1.0'),
+      request: async () => releaseResponse('2.1.0'),
     })
 
     await harness.tray.invoke()
@@ -496,7 +498,7 @@ describe('desktop update Host plugin', () => {
     const download = new Promise<void>((_resolve, reject) => { rejectDownload = reject })
     const harness = await createHarness({
       packaged: false,
-      request: async () => versionResponse('2.1.0'),
+      request: async () => releaseResponse('2.1.0'),
       confirmDownload: async () => true,
       downloadAndOpen: async () => download,
     })
@@ -536,7 +538,7 @@ describe('desktop update Host plugin', () => {
     let downloadSignal: AbortSignal | undefined
     const downloading = await createHarness({
       packaged: false,
-      request: async () => versionResponse('2.1.0'),
+      request: async () => releaseResponse('2.1.0'),
       confirmDownload: async () => true,
       downloadAndOpen: async (_version, signal) => new Promise<void>((_resolve, reject) => {
         downloadSignal = signal
@@ -557,7 +559,7 @@ describe('desktop update Host plugin', () => {
 
   it('releases one update generation once and does not restart background polling', async () => {
     vi.useFakeTimers()
-    const request = vi.fn(async () => versionResponse('2.0.0'))
+    const request = vi.fn(async () => releaseResponse('2.0.0'))
     const harness = await createHarness({ request })
 
     await harness.dispose()

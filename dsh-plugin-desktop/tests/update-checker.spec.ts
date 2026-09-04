@@ -1,23 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
-  DESKTOP_CURRENT_VERSION_HEADER,
-  DESKTOP_VERSION_ENDPOINT,
-  MAX_VERSION_RESPONSE_BYTES,
+  DESKTOP_LATEST_RELEASE_ENDPOINT,
+  MAX_RELEASE_RESPONSE_BYTES,
   checkForStableUpdate,
   compareSemVerVersions,
-  desktopVersionRequestHeaders,
+  desktopReleaseRequestHeaders,
+  desktopReleaseTagEndpoint,
   parseSemVer,
   type UpdateRequest,
 } from '../src/update-checker.ts'
-import {
-  assertDesktopInstallationId,
-  DESKTOP_INSTALLATION_ID_HEADER,
-} from '../src/desktop-installation-id.ts'
 
-const INSTALLATION_ID = assertDesktopInstallationId('01234567-89ab-4cde-8f01-23456789abcd')
-
-function versionResponse(version: unknown, init: ResponseInit = {}): Response {
-  return Response.json({ version }, init)
+function releaseResponse(tag: unknown, init: ResponseInit = {}): Response {
+  return Response.json({ tag_name: tag }, init)
 }
 
 describe('strict SemVer parsing', () => {
@@ -60,17 +54,16 @@ describe('strict SemVer parsing', () => {
 })
 
 describe('public Desktop version check', () => {
-  it('uses only the fixed no-cache version endpoint and reports a newer stable version', async () => {
+  it('uses only the fixed no-cache GitHub endpoint and reports a newer stable version', async () => {
     const controller = new AbortController()
     const calls: Array<{ url: string, init: RequestInit }> = []
     const request: UpdateRequest = async (url, init) => {
       calls.push({ url, init })
-      return versionResponse('2.10.0')
+      return releaseResponse('v2.10.0')
     }
 
     await expect(checkForStableUpdate({
       currentVersion: '2.9.9',
-      installationId: INSTALLATION_ID,
       signal: controller.signal,
       request,
     })).resolves.toEqual({
@@ -80,77 +73,59 @@ describe('public Desktop version check', () => {
     })
 
     expect(calls).toHaveLength(1)
-    expect(calls[0]?.url).toBe(DESKTOP_VERSION_ENDPOINT)
-    expect(calls[0]?.url).not.toContain('/api/downloads/')
+    expect(calls[0]?.url).toBe(DESKTOP_LATEST_RELEASE_ENDPOINT)
+    expect(calls[0]?.url).not.toContain('/releases/tags/')
     expect(calls[0]?.init).toMatchObject({
       method: 'GET',
       cache: 'no-store',
-      redirect: 'error',
+      redirect: 'follow',
       signal: controller.signal,
     })
     const headers = new Headers(calls[0]?.init.headers)
-    expect(headers.get('accept')).toBe('application/json')
-    expect(headers.get(DESKTOP_CURRENT_VERSION_HEADER)).toBe('2.9.9')
-    expect(headers.get(DESKTOP_INSTALLATION_ID_HEADER)).toBe(INSTALLATION_ID)
+    expect(headers.get('accept')).toBe('application/vnd.github+json')
+    expect(headers.get('x-github-api-version')).toBe('2022-11-28')
+    expect(headers.get('user-agent')).toBe(desktopReleaseRequestHeaders()['User-Agent'])
+    expect(headers.has('x-dsh-desktop-version')).toBe(false)
+    expect(headers.has('x-dsh-desktop-channel')).toBe(false)
+    expect(headers.has('x-dsh-desktop-installation-id')).toBe(false)
     expect(headers.has('if-none-match')).toBe(false)
-    expect(headers.has('x-github-api-version')).toBe(false)
   })
 
-  it('builds a bounded version-check header set and rejects malformed identities', () => {
-    expect(desktopVersionRequestHeaders(INSTALLATION_ID)).toEqual({
-      Accept: 'application/json',
-      [DESKTOP_INSTALLATION_ID_HEADER]: INSTALLATION_ID,
-    })
-    expect(desktopVersionRequestHeaders(INSTALLATION_ID, '2.9.9')).toEqual({
-      Accept: 'application/json',
-      [DESKTOP_CURRENT_VERSION_HEADER]: '2.9.9',
-      [DESKTOP_INSTALLATION_ID_HEADER]: INSTALLATION_ID,
-    })
-    expect(desktopVersionRequestHeaders()).toEqual({ Accept: 'application/json' })
-    expect(() => desktopVersionRequestHeaders(undefined, '2.9.0-rc.1')).toThrow('canonical stable SemVer')
-    expect(() => desktopVersionRequestHeaders('not-a-uuid')).toThrow('canonical lowercase UUID v4')
-  })
-
-  it('skips the fixed endpoint when an invalid installation identity reaches the checker', async () => {
-    const request = vi.fn(async () => versionResponse('2.1.0'))
-    await expect(checkForStableUpdate({
-      currentVersion: '2.0.0',
-      installationId: 'not-a-uuid' as never,
-      request,
-    })).resolves.toBeNull()
-    expect(request).not.toHaveBeenCalled()
+  it('exposes the fixed tag endpoint used to pin one checked release', () => {
+    expect(desktopReleaseTagEndpoint('2.10.0'))
+      .toBe('https://api.github.com/repos/neophack/dsh-desktop/releases/tags/v2.10.0')
   })
 
   it.each([
+    ['2.0.0', 'v2.0.0'],
+    ['2.0.1', 'v2.0.0'],
+    ['2.0.0+installed', 'v2.0.0+release'],
     ['2.0.0', '2.0.0'],
-    ['2.0.1', '2.0.0'],
-    ['2.0.0+installed', '2.0.0+release'],
-  ])('reports no update for installed %s and service %s', async (currentVersion, latestVersion) => {
+  ])('reports no update for installed %s and release tag %s', async (currentVersion, tag) => {
     await expect(checkForStableUpdate({
       currentVersion,
-      request: async () => versionResponse(latestVersion),
+      request: async () => releaseResponse(tag),
     })).resolves.toEqual({
       status: 'up-to-date',
       currentVersion,
-      latestVersion,
+      latestVersion: tag.startsWith('v') ? tag.slice(1) : tag,
     })
   })
 
-  it('compares service versions without overflowing JavaScript numbers', async () => {
+  it('compares release versions without overflowing JavaScript numbers', async () => {
     await expect(checkForStableUpdate({
       currentVersion: '9007199254740992.0.0',
-      request: async () => versionResponse('10000000000000000.0.0'),
+      request: async () => releaseResponse('v10000000000000000.0.0'),
     })).resolves.toMatchObject({ status: 'update-available' })
   })
 
   it.each([
-    ['leading v', { version: 'v2.1.0' }],
-    ['prerelease', { version: '2.1.0-rc.1' }],
-    ['invalid SemVer', { version: '2.01.0' }],
-    ['missing version', {}],
-    ['non-string version', { version: 2 }],
-    ['array response', ['2.1.0']],
-  ])('silently ignores a service response with %s', async (_case, value) => {
+    ['prerelease tag', { tag_name: 'v2.1.0-rc.1' }],
+    ['invalid SemVer tag', { tag_name: 'v2.01.0' }],
+    ['missing tag', {}],
+    ['non-string tag', { tag_name: 2 }],
+    ['list response', ['v2.1.0']],
+  ])('silently ignores a release document with %s', async (_case, value) => {
     await expect(checkForStableUpdate({
       currentVersion: '2.0.0',
       request: async () => Response.json(value),
@@ -168,7 +143,7 @@ describe('public Desktop version check', () => {
     })).resolves.toBeNull()
     await expect(checkForStableUpdate({
       currentVersion: '2.0.0',
-      request: async () => new Response(null, { status: 304 }),
+      request: async () => new Response(null, { status: 404 }),
     })).resolves.toBeNull()
   })
 
@@ -191,17 +166,17 @@ describe('public Desktop version check', () => {
     await expect(checkForStableUpdate({
       currentVersion: '2.0.0',
       request: async () => new Response('{}', {
-        headers: { 'content-length': String(MAX_VERSION_RESPONSE_BYTES + 1) },
+        headers: { 'content-length': String(MAX_RELEASE_RESPONSE_BYTES + 1) },
       }),
     })).resolves.toBeNull()
     await expect(checkForStableUpdate({
       currentVersion: '2.0.0',
-      request: async () => new Response('x'.repeat(MAX_VERSION_RESPONSE_BYTES + 1)),
+      request: async () => new Response('x'.repeat(MAX_RELEASE_RESPONSE_BYTES + 1)),
     })).resolves.toBeNull()
   })
 
   it.each(['2.0', 'v2.0.0', '2.0.0-rc.1'])('skips invalid installed version %s before requesting', async currentVersion => {
-    const request = vi.fn(async () => versionResponse('2.1.0'))
+    const request = vi.fn(async () => releaseResponse('v2.1.0'))
 
     await expect(checkForStableUpdate({ currentVersion, request })).resolves.toBeNull()
     expect(request).not.toHaveBeenCalled()

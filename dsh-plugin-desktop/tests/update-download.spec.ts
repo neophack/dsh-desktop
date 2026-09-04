@@ -2,8 +2,8 @@ import { access, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } fro
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { desktopReleaseTagEndpoint } from '../src/update-checker.ts'
 import {
-  DESKTOP_DOWNLOAD_URLS,
   MAX_UPDATE_DOWNLOAD_BYTES,
   UpdateDownloadError,
   desktopUpdateFilename,
@@ -25,6 +25,28 @@ async function temporaryDirectory(): Promise<string> {
 
 function destinationPath(root: string, platform: DesktopDownloadPlatform, version: string): string {
   return join(root, desktopUpdateFilename(platform, version))
+}
+
+function assetUrl(version: string, name: string): string {
+  return `https://github.com/neophack/dsh-desktop/releases/download/v${version}/${name}`
+}
+
+function releaseResponse(version: string, assets: readonly string[]): Response {
+  return Response.json({
+    tag_name: `v${version}`,
+    assets: assets.map(name => ({ name, browser_download_url: assetUrl(version, name) })),
+  })
+}
+
+/** Serve the release document for one version and one streamed response for every asset URL. */
+function releaseServingRequest(
+  version: string,
+  assetNames: readonly string[],
+  artifact: () => Response | Promise<Response>,
+): UpdateArtifactRequest {
+  return async url => url === desktopReleaseTagEndpoint(version)
+    ? releaseResponse(version, assetNames)
+    : artifact()
 }
 
 function dmgArtifact(): Uint8Array {
@@ -77,12 +99,13 @@ afterEach(async () => {
 })
 
 describe('desktop update installer download', () => {
-  it('streams a macOS DMG from only the fixed endpoint and atomically completes it', async () => {
+  it('resolves the macOS DMG asset from the checked release and atomically completes it', async () => {
     const directory = await temporaryDirectory()
     const artifact = dmgArtifact()
     const calls: Array<{ url: string; init: RequestInit }> = []
     const request: UpdateArtifactRequest = async (url, init) => {
       calls.push({ url, init })
+      if (url === desktopReleaseTagEndpoint('2.1.0')) return releaseResponse('2.1.0', ['DSH.Desktop-2.1.0-universal.dmg'])
       return chunkedResponse([artifact.subarray(0, 333), artifact.subarray(333)])
     }
 
@@ -95,28 +118,55 @@ describe('desktop update installer download', () => {
 
     expect(result).toBe(join(directory, 'DSH-Desktop-2.1.0-mac.dmg'))
     expect(await readFile(result)).toEqual(Buffer.from(artifact))
-    expect(calls).toHaveLength(1)
-    expect(calls[0]?.url).toBe(DESKTOP_DOWNLOAD_URLS.darwin)
+    expect(calls).toHaveLength(2)
+    expect(calls[0]?.url).toBe(desktopReleaseTagEndpoint('2.1.0'))
     expect(calls[0]?.init).toMatchObject({ method: 'GET', cache: 'no-store', redirect: 'follow' })
+    expect(new Headers(calls[0]?.init.headers).get('accept')).toBe('application/vnd.github+json')
+    expect(calls[1]?.url).toBe(assetUrl('2.1.0', 'DSH.Desktop-2.1.0-universal.dmg'))
+    expect(calls[1]?.init).toMatchObject({ method: 'GET', cache: 'no-store', redirect: 'follow' })
     await expectNoPartialFiles(directory)
   })
 
-  it('accepts a Windows executable only when it has both MZ and PE signatures', async () => {
+  it('accepts a Windows executable asset and never the portable archive', async () => {
     const directory = await temporaryDirectory()
     const artifact = windowsArtifact()
+
     const result = await downloadDesktopUpdate({
       platform: 'win32',
       version: '2.2.0',
       destinationPath: destinationPath(directory, 'win32', '2.2.0'),
-      request: async (url) => {
-        expect(url).toBe(DESKTOP_DOWNLOAD_URLS.win32)
-        return chunkedResponse([artifact])
-      },
+      request: releaseServingRequest(
+        '2.2.0',
+        ['DSH-Desktop-2.2.0-x64-Setup.exe', 'DSH-Desktop-2.2.0-x64-Portable.zip'],
+        async () => chunkedResponse([artifact]),
+      ),
     })
 
     expect(result).toBe(join(directory, 'DSH-Desktop-2.2.0-windows.exe'))
     expect(await readFile(result)).toEqual(Buffer.from(artifact))
     await expectNoPartialFiles(directory)
+  })
+
+  it('prefers the expected architecture when a release carries several matching assets', async () => {
+    const directory = await temporaryDirectory()
+    const artifact = dmgArtifact()
+    const requested: string[] = []
+    const request: UpdateArtifactRequest = async (url) => {
+      if (url === desktopReleaseTagEndpoint('2.3.0')) {
+        return releaseResponse('2.3.0', ['DSH.Desktop-2.3.0-x64.dmg', 'DSH.Desktop-2.3.0-universal.dmg'])
+      }
+      requested.push(url)
+      return chunkedResponse([artifact])
+    }
+
+    await downloadDesktopUpdate({
+      platform: 'darwin',
+      version: '2.3.0',
+      destinationPath: destinationPath(directory, 'darwin', '2.3.0'),
+      request,
+    })
+
+    expect(requested).toEqual([assetUrl('2.3.0', 'DSH.Desktop-2.3.0-universal.dmg')])
   })
 
   it('accepts canonical stable SemVer build metadata in the private artifact path', async () => {
@@ -125,7 +175,7 @@ describe('desktop update installer download', () => {
       platform: 'darwin',
       version: '2.8.0+build',
       destinationPath: destinationPath(directory, 'darwin', '2.8.0+build'),
-      request: async () => chunkedResponse([dmgArtifact()]),
+      request: releaseServingRequest('2.8.0+build', ['DSH.Desktop-2.8.0+build-universal.dmg'], async () => chunkedResponse([dmgArtifact()])),
     })
 
     expect(result).toBe(join(
@@ -135,16 +185,34 @@ describe('desktop update installer download', () => {
   })
 
   it.each([
+    ['a release tag different from the requested version', 'darwin', () => releaseResponse('9.9.9', ['DSH.Desktop-9.9.9-universal.dmg'])],
+    ['a release without an installer asset', 'darwin', () => releaseResponse('2.3.0', ['DSH-Desktop-2.3.0-x64-Portable.zip'])],
+    ['a release with ambiguous installer assets', 'win32', () => releaseResponse('2.3.0', ['DSH-Desktop-2.3.0-x64-Setup.exe', 'DSH-Desktop-2.3.0-arm64-Setup.exe'])],
+    ['a malformed release document', 'darwin', () => new Response('{')],
+  ] as const)('rejects %s without leaving a partial file', async (_label, platform, document) => {
+    const directory = await temporaryDirectory()
+    await expectFailure(downloadDesktopUpdate({
+      platform,
+      version: '2.3.0',
+      destinationPath: join(directory, desktopUpdateFilename(platform, '2.3.0')),
+      request: async () => document(),
+    }), 'invalid-artifact')
+    await expectNoPartialFiles(directory)
+    expect(await readdir(directory)).toEqual([])
+  })
+
+  it.each([
     ['darwin', new Uint8Array(1024)],
     ['win32', Object.assign(windowsArtifact(), { 0: 0 })],
     ['win32', Object.assign(windowsArtifact(), { 0x80: 0 })],
   ] as const)('rejects and removes an invalid %s artifact', async (platform, artifact) => {
     const directory = await temporaryDirectory()
+    const asset = platform === 'darwin' ? 'DSH.Desktop-2.3.0-universal.dmg' : 'DSH-Desktop-2.3.0-x64-Setup.exe'
     await expectFailure(downloadDesktopUpdate({
       platform,
       version: '2.3.0',
       destinationPath: destinationPath(directory, platform, '2.3.0'),
-      request: async () => chunkedResponse([artifact]),
+      request: releaseServingRequest('2.3.0', [asset], async () => chunkedResponse([artifact])),
     }), 'invalid-artifact')
     await expectNoPartialFiles(directory)
     expect(await readdir(directory)).toEqual([])
@@ -160,7 +228,7 @@ describe('desktop update installer download', () => {
       platform: 'win32',
       version: '2.3.1',
       destinationPath: path,
-      request: async () => chunkedResponse([Buffer.alloc(128)]),
+      request: releaseServingRequest('2.3.1', ['DSH-Desktop-2.3.1-x64-Setup.exe'], async () => chunkedResponse([Buffer.alloc(128)])),
     }), 'invalid-artifact')
     expect(await readFile(path)).toEqual(existing)
 
@@ -169,23 +237,34 @@ describe('desktop update installer download', () => {
       platform: 'win32',
       version: '2.3.1',
       destinationPath: path,
-      request: async () => chunkedResponse([replacement]),
+      request: releaseServingRequest('2.3.1', ['DSH-Desktop-2.3.1-x64-Setup.exe'], async () => chunkedResponse([replacement])),
     })
     expect(await readFile(path)).toEqual(Buffer.from(replacement))
     await expectNoPartialFiles(directory)
   })
 
-  it.each([
-    ['an unsuccessful response', async () => new Response(null, { status: 503 }), 'http-status'],
-    ['a missing response body', async () => new Response(null, { status: 200 }), 'empty-body'],
-    ['a zero-byte response body', async () => chunkedResponse([]), 'empty-body'],
-  ] as const)('rejects %s without leaving a partial file', async (_label, request, code) => {
+  it('rejects an unavailable release document with its HTTP status', async () => {
     const directory = await temporaryDirectory()
     await expectFailure(downloadDesktopUpdate({
       platform: 'darwin',
       version: '2.4.0',
       destinationPath: destinationPath(directory, 'darwin', '2.4.0'),
-      request,
+      request: async () => new Response(null, { status: 404 }),
+    }), 'http-status')
+    await expectNoPartialFiles(directory)
+  })
+
+  it.each([
+    ['an unsuccessful artifact response', async () => new Response(null, { status: 503 }), 'http-status'],
+    ['a missing artifact response body', async () => new Response(null, { status: 200 }), 'empty-body'],
+    ['a zero-byte artifact response body', async () => chunkedResponse([]), 'empty-body'],
+  ] as const)('rejects %s without leaving a partial file', async (_label, response, code) => {
+    const directory = await temporaryDirectory()
+    await expectFailure(downloadDesktopUpdate({
+      platform: 'darwin',
+      version: '2.4.0',
+      destinationPath: destinationPath(directory, 'darwin', '2.4.0'),
+      request: releaseServingRequest('2.4.0', ['DSH.Desktop-2.4.0-universal.dmg'], response),
     }), code)
     await expectNoPartialFiles(directory)
   })
@@ -196,10 +275,10 @@ describe('desktop update installer download', () => {
       platform: 'darwin',
       version: '2.5.0',
       destinationPath: destinationPath(directory, 'darwin', '2.5.0'),
-      request: async () => chunkedResponse(
+      request: releaseServingRequest('2.5.0', ['DSH.Desktop-2.5.0-universal.dmg'], async () => chunkedResponse(
         [dmgArtifact()],
         { 'content-length': String(MAX_UPDATE_DOWNLOAD_BYTES + 1) },
-      ),
+      )),
     }), 'response-too-large')
     await expectNoPartialFiles(directory)
   })
@@ -208,7 +287,8 @@ describe('desktop update installer download', () => {
     const directory = await temporaryDirectory()
     const controller = new AbortController()
     let requestSignal: AbortSignal | null | undefined
-    const request: UpdateArtifactRequest = async (_url, init) => {
+    const request: UpdateArtifactRequest = async (url, init) => {
+      if (url === desktopReleaseTagEndpoint('2.6.0')) return releaseResponse('2.6.0', ['DSH.Desktop-2.6.0-universal.dmg'])
       requestSignal = init.signal
       return new Response(new ReadableStream<Uint8Array>({
         pull(stream) {
