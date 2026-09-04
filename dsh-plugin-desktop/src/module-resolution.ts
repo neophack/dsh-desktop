@@ -123,7 +123,18 @@ export function installProfilePackageResolver(profileBaseUrl: string): () => voi
         return resolved
       } catch (cause) {
         if ((cause as NodeJS.ErrnoException).code !== 'ERR_MODULE_NOT_FOUND') throw cause
-        const resolved = nextResolve(specifier, { ...context, parentURL: profileBaseUrl })
+        let resolved
+        try {
+          resolved = nextResolve(specifier, { ...context, parentURL: profileBaseUrl })
+        } catch (profileCause) {
+          if ((profileCause as NodeJS.ErrnoException).code !== 'ERR_MODULE_NOT_FOUND') throw profileCause
+          // An install-sourced plugin's own peer dependency (declared, not
+          // bundled — resolved instead from the Desktop installation's own
+          // node_modules) is neither next to the plugin's real, symlink-
+          // resolved location nor inside the active Profile. Fall back to the
+          // Desktop installation anchor before giving up.
+          resolved = nextResolve(specifier, { ...context, parentURL: DESKTOP_ENTRY_URL })
+        }
         overlayModuleUrls.add(resolved.url)
         return resolved
       }

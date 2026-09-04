@@ -170,6 +170,45 @@ describe('installProfilePackageResolver', () => {
     expect(harness.resolve?.('profile-peer', { parentURL: desktopPluginUrl }, nextResolve)).toEqual({ url: profilePeerUrl })
   })
 
+  it('falls back to the Desktop installation for an install-sourced plugin dependency missing from both the plugin and the Profile', () => {
+    // A peer dependency declared by an install-sourced plugin (e.g.
+    // dsh-plugin-newapi's `@deepseek-ai/dsh-credentials`) lives in the
+    // Desktop installation's own node_modules, not bundled next to the
+    // plugin's real (symlink-resolved) location, and an isolated/throwaway
+    // Profile never carries it either. Resolution must not give up after
+    // just those two attempts.
+    const profileBaseUrl = 'file:///C:/Users/test/profile/package.json'
+    const desktopPluginUrl = 'file:///Applications/DSH.app/Contents/Resources/app.asar/node_modules/plugin/lib/index.js'
+    const desktopPeerUrl = 'file:///Applications/DSH.app/Contents/Resources/app.asar/node_modules/@deepseek-ai/dsh-credentials/index.js'
+    harness.sources.set('plugin', 'install')
+    installProfilePackageResolver(profileBaseUrl)
+    const nextResolve = vi.fn((specifier: string, context: { parentURL?: string }) => {
+      if (specifier === 'plugin' && context.parentURL?.endsWith('/lib/index.js')) return { url: desktopPluginUrl }
+      if (specifier === '@deepseek-ai/dsh-credentials') {
+        // Neither the plugin's own real (symlink-resolved) file nor the
+        // Profile carries this peer dependency — only the real Desktop-entry
+        // anchor does. Desktop's own entry anchor also ends with
+        // /lib/index.js, so the exact-equality checks must run first.
+        if (context.parentURL === desktopPluginUrl) throw missing(specifier, context.parentURL)
+        if (context.parentURL === profileBaseUrl) throw missing(specifier, context.parentURL)
+        if (context.parentURL?.endsWith('/lib/index.js')) return { url: desktopPeerUrl }
+      }
+      throw missing(specifier, context.parentURL)
+    })
+    const loaderEntryUrl = import.meta.resolve('@deepseek-ai/cordis-plugin-loader')
+
+    expect(harness.resolve?.('plugin', { parentURL: loaderEntryUrl }, nextResolve)).toEqual({ url: desktopPluginUrl })
+    expect(harness.resolve?.('@deepseek-ai/dsh-credentials', { parentURL: desktopPluginUrl }, nextResolve))
+      .toEqual({ url: desktopPeerUrl })
+    // Both the direct attempt and the Profile fallback were tried, in that
+    // order, before the Desktop-entry fallback resolved it.
+    expect(nextResolve).toHaveBeenNthCalledWith(2, '@deepseek-ai/dsh-credentials', { parentURL: desktopPluginUrl })
+    expect(nextResolve).toHaveBeenNthCalledWith(3, '@deepseek-ai/dsh-credentials', { parentURL: profileBaseUrl })
+    expect(nextResolve).toHaveBeenNthCalledWith(4, '@deepseek-ai/dsh-credentials', expect.objectContaining({
+      parentURL: expect.stringMatching(/\/lib\/index\.js$/u),
+    }))
+  })
+
   it('does not expose Profile dependencies to unrelated modules', () => {
     const profileBaseUrl = 'file:///C:/Users/test/profile/package.json'
     installProfilePackageResolver(profileBaseUrl)
