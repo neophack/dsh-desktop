@@ -44,8 +44,11 @@
     "@deepseek-ai/dsh-client-connection": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-client-locale": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-client-runtime": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-client-ui-settings": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-client-ui-sidebar": "^0.1.1-rc.2"
+    "@deepseek-ai/dsh-client-ui-sidebar": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-credentials": "^0.1.1-rc.2",
+    "@deepseek-ai/schemastery": "^3.18.2"
   },
   "devDependencies": {
     "esbuild": "^0.25.0"
