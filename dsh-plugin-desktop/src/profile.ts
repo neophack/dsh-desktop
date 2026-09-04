@@ -305,6 +305,7 @@ export interface SkippedOptionalEntry {
  */
 export function desktopBundleList(current: readonly string[]): string[] {
   const thirdParty = current.filter(name => !REQUIRED_BUNDLE_SET.has(name)
+    && !DESKTOP_DEFAULT_BUNDLE_SET.has(name)
     && !DESKTOP_PACKAGE_NAMES.has(name)
     && !DESKTOP_DEFAULT_BUNDLE_SET.has(name)
     && !OBSOLETE_DESKTOP_BUNDLE_SET.has(name))
