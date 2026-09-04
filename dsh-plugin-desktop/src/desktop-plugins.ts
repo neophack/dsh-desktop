@@ -45,6 +45,7 @@ const IMMUTABLE_BUNDLES = new Set([
   ...DESKTOP_PACKAGE_NAMES,
   'dsh-community-market',
   'dsh-plugin-newapi',
+  'dsh-plugin-websearch',
 ])
 
 /** One direct bundle declared by the active profile. */

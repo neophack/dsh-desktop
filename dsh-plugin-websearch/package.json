@@ -1,0 +1,66 @@
+{
+  "name": "dsh-plugin-websearch",
+  "version": "0.1.0",
+  "description": "Generic web search for DSH Desktop: a ctx.web search provider that runs queries through a self-hosted Crawl4AI server (SERP crawl + structured extraction), defaulting to http://172.24.204.251:21235",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/types/client.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-api-remotes"
+      ]
+    }
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-web": "^0.1.1-rc.2"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "lib/types/index.d.ts",
+    "lib/types/client.d.ts",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh.md"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node test/smoke.mjs && node test/provider.mjs && node test/patch-shape.mjs && node test/client-shape.mjs",
+    "prepublishOnly": "node build.mjs"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "websearch",
+    "search",
+    "crawl4ai"
+  ]
+}

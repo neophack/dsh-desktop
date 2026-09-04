@@ -1,0 +1,32 @@
+# Loader patch declaring the generic web-search plugin (Crawl4AI-backed).
+#
+# A top-level `id:` row targets an EXISTING bundle entry (override); a new
+# plugin must be inserted, so this layer uses the `insert:` list form for the
+# plugin row itself and overrides for the upstream web rows. Loader overrides
+# replace a row's `config` wholesale, so the `web` row restates BOTH provider
+# selections: search goes through the generic Crawl4AI provider registered by
+# dsh-plugin-websearch, fetch stays on the upstream anonymous HTTP provider.
+#
+# To restore the shipped DeepSeek search instead: remove these overrides and
+# re-enable the `web-search-deepseek` row in a user profile patch.
+- id: web
+  config:
+    searchProvider: crawl4ai
+    fetchProvider: http
+
+# The DeepSeek search provider needs DEEPSEEK_API_KEY and a full auxiliary
+# model turn per query; the desktop product ships no DeepSeek credential by
+# default (see the empty `llm-deepseek` catalog), so its row is disabled here
+# to keep the settings surface honest. The generic provider above replaces it.
+- id: web-search-deepseek
+  disabled: true
+
+- insert:
+    - id: websearch
+      name: dsh-plugin-websearch
+      config:
+        # Crawl4AI server installed for this product; every web_search query
+        # asks it to crawl one search-engine results page.
+        baseUrl: http://172.24.204.251:21235
+        # Search engine whose results page is crawled: bing | duckduckgo.
+        engine: bing

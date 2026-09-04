@@ -133,6 +133,7 @@ describe('desktop profile composition', {
       '@deepseek-ai/dsh-base',
       '@deepseek-ai/dsh-web-app',
       'dsh-plugin-newapi',
+      'dsh-plugin-websearch',
       'third-party-one',
       'third-party-two',
     ])
@@ -160,6 +161,7 @@ describe('desktop profile composition', {
       '@deepseek-ai/dsh-base',
       '@deepseek-ai/dsh-web-app',
       'dsh-plugin-newapi',
+      'dsh-plugin-websearch',
       'third-party-plugin',
     ])
     expect(repaired.dependencies).toEqual({ 'third-party-plugin': '^1.2.3' })
@@ -192,7 +194,54 @@ describe('desktop profile composition', {
       '@deepseek-ai/dsh-base',
       '@deepseek-ai/dsh-web-app',
       'dsh-plugin-newapi',
+      'dsh-plugin-websearch',
     ])
+  })
+
+  it('heals launcher defaults into a selected non-desktop profile before composing', () => {
+    const home = temporaryHome()
+    const dir = join(home, 'profiles', 'web')
+    const template = PROFILE_TEMPLATES.web
+    if (template === undefined) throw new Error('test requires the shipped Web template')
+    initProfile(dir, template.bundles, template.patchReload)
+    const path = join(dir, 'package.json')
+    const manifest = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+    writeFileSync(path, JSON.stringify({
+      ...manifest,
+      dependencies: { dshmarket: '1.41.0' },
+      dsh: {
+        profile: {
+          bundles: [
+            '@deepseek-ai/dsh-base',
+            '@deepseek-ai/dsh-web-app',
+            'dsh-plugin-newapi',
+            'dshmarket',
+          ],
+        },
+      },
+    }, undefined, 2) + '\n')
+
+    const prepared = prepareDesktopProfile(undefined, home, 'win32', 'web')
+    const repaired = JSON.parse(readFileSync(path, 'utf8')) as {
+      dependencies: Record<string, string>
+      dsh: { profile: { bundles: string[] } }
+    }
+    expect(repaired.dsh.profile.bundles).toEqual([
+      '@deepseek-ai/dsh-base',
+      '@deepseek-ai/dsh-web-app',
+      'dsh-plugin-newapi',
+      'dsh-plugin-websearch',
+      'dshmarket',
+    ])
+    expect(repaired.dependencies).toEqual({ dshmarket: '1.41.0' })
+    expect(prepared.profile.layers.map(layer => layer.packageName)).toContain('dsh-plugin-websearch')
+    const rows = composeEntries([prepared.patches])
+    expect(rows.find(row => row.id === 'web')?.config).toEqual(expect.objectContaining({
+      searchProvider: 'crawl4ai',
+      fetchProvider: 'http',
+    }))
+    expect(rows.find(row => row.id === 'web-search-deepseek')?.disabled).toBe(true)
+    expect(rows.find(row => row.id === 'websearch')?.name).toBe('dsh-plugin-websearch')
   })
 
   it('marks legacy isolated Profile dependencies for one-time migration', () => {

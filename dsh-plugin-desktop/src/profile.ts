@@ -78,7 +78,7 @@ const BIN_NAME = DESKTOP_PACKAGE_NAME
 const REQUIRED_BUNDLES = requiredWebBundles()
 const REQUIRED_BUNDLE_SET = new Set(REQUIRED_BUNDLES)
 /** Bundles the launcher installs by default (shipped as app dependencies). */
-const DESKTOP_DEFAULT_BUNDLES = ['dsh-plugin-newapi']
+const DESKTOP_DEFAULT_BUNDLES = ['dsh-plugin-newapi', 'dsh-plugin-websearch']
 const DESKTOP_DEFAULT_BUNDLE_SET = new Set(DESKTOP_DEFAULT_BUNDLES)
 const OBSOLETE_DESKTOP_BUNDLE_SET = new Set(['@deepseek-ai/dsh-desktop-app'])
 const INSTALL_ANCHOR = unpackedAsarPath(fileURLToPath(new URL('../package.json', import.meta.url)))
@@ -485,7 +485,25 @@ function loadRecoveryFilteredProfile(
     && (!Array.isArray(rawBundles) || rawBundles.some(value => typeof value !== 'string'))) {
     throw new Error(`${BIN_NAME}: dsh.profile.bundles must be an array of package names`)
   }
-  const bundles = (rawBundles ?? []) as string[]
+  let bundles = (rawBundles ?? []) as string[]
+  // Launcher defaults are product bundles shipped as app dependencies, so every
+  // profile this launcher composes carries them: a profile created before a
+  // default existed (or through the upstream `dsh plugin` CLI) would otherwise
+  // silently keep composing without the default's bundle layer and patch.
+  const healedBundles = desktopBundleList(bundles)
+  if (!sameList(bundles, healedBundles)) {
+    bundles = healedBundles
+    writeProfileManifest(profileDir, {
+      ...manifest,
+      dsh: {
+        ...manifest.dsh,
+        profile: {
+          ...manifest.dsh?.profile,
+          bundles: healedBundles,
+        },
+      },
+    })
+  }
   const rawPatchReload: unknown = manifest.dsh?.profile?.patchReload
   if (rawPatchReload !== undefined && rawPatchReload !== 'live' && rawPatchReload !== 'startup') {
     throw new Error(`${BIN_NAME}: dsh.profile.patchReload must be "live" or "startup"`)

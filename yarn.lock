@@ -9390,6 +9390,8 @@ __metadata:
     class-variance-authority: "npm:^0.7.1"
     clsx: "npm:^2.1.1"
     dsh-community-market: "npm:0.1.0-dev.0"
+    dsh-plugin-newapi: "npm:0.8.4"
+    dsh-plugin-websearch: "npm:0.1.0"
     dshmarket: "npm:1.38.1"
     electron: "npm:43.3.0"
     electron-builder: "npm:26.15.7"
@@ -9420,7 +9422,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"dsh-plugin-newapi@workspace:^, dsh-plugin-newapi@workspace:dsh-plugin-newapi":
+"dsh-plugin-newapi@npm:0.8.4, dsh-plugin-newapi@workspace:dsh-plugin-newapi":
   version: 0.0.0-use.local
   resolution: "dsh-plugin-newapi@workspace:dsh-plugin-newapi"
   dependencies:
@@ -9434,6 +9436,17 @@ __metadata:
     "@deepseek-ai/dsh-client-runtime": ^0.1.1-rc.2
     "@deepseek-ai/dsh-client-ui-settings": ^0.1.1-rc.2
     "@deepseek-ai/dsh-client-ui-sidebar": ^0.1.1-rc.2
+  languageName: unknown
+  linkType: soft
+
+"dsh-plugin-websearch@npm:0.1.0, dsh-plugin-websearch@workspace:dsh-plugin-websearch":
+  version: 0.0.0-use.local
+  resolution: "dsh-plugin-websearch@workspace:dsh-plugin-websearch"
+  dependencies:
+    esbuild: "npm:^0.25.0"
+  peerDependencies:
+    "@deepseek-ai/cordis": ^4.0.1
+    "@deepseek-ai/dsh-web": ^0.1.1-rc.2
   languageName: unknown
   linkType: soft
 
