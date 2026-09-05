@@ -62,6 +62,7 @@ const workspaceManifest = JSON.parse(readFileSync(new URL('package.json', worksp
 const ciWorkflow = readFileSync(new URL('.github/workflows/ci.yml', workspaceRoot), 'utf8')
 const main = readFileSync(new URL('src/main.ts', packageRoot), 'utf8')
 const runtimeVersion = '0.1.2-rc.1'
+const betaRuntimeVersion = '0.1.3-alpha.1'
 const dshResolution = (name: string): unknown =>
   workspaceManifest.resolutions?.[`${name}@npm:${runtimeVersion}`]
 
@@ -265,14 +266,26 @@ describe('published package surface', () => {
     )
   })
 
-  it('keeps both Desktop channels on the RC1 runtime family', () => {
+  it('keeps the Stable and Beta DSH runtime families side by side', () => {
     const dshResolutions = Object.entries(workspaceManifest.resolutions ?? {})
-      .filter(([selector]) => selector === '@deepseek-ai/dsh' || selector.startsWith('@deepseek-ai/dsh-'))
+      .filter(([selector]) => /^@deepseek-ai\/dsh(?:@|-)/u.test(selector))
+    const stableResolutions = dshResolutions.filter(([selector]) =>
+      selector.endsWith(`@npm:${runtimeVersion}`)
+      || selector.endsWith(`@npm:^${runtimeVersion}`))
+    const betaResolutions = dshResolutions.filter(([selector]) =>
+      selector.endsWith(`@npm:${betaRuntimeVersion}`)
+      || selector.endsWith(`@npm:^${betaRuntimeVersion}`))
 
-    expect(dshResolutions.length).toBeGreaterThan(0)
-    for (const [selector, resolution] of dshResolutions) {
+    expect(stableResolutions.length).toBeGreaterThan(0)
+    expect(betaResolutions.length).toBeGreaterThan(0)
+    expect(stableResolutions.length + betaResolutions.length).toBe(dshResolutions.length)
+    for (const [selector, resolution] of stableResolutions) {
       expect(selector).toMatch(/@npm:\^?0\.1\.2-rc\.1$/u)
-      expect(String(resolution)).toContain('0.1.2-rc.1')
+      expect(String(resolution)).toContain(runtimeVersion)
+    }
+    for (const [selector, resolution] of betaResolutions) {
+      expect(selector).toMatch(/@npm:\^?0\.1\.3-alpha\.1$/u)
+      expect(String(resolution)).toContain(betaRuntimeVersion)
     }
   })
 
@@ -462,6 +475,21 @@ describe('published package surface', () => {
     expect(list).toBeGreaterThan(create)
     expect(persist).toBeGreaterThan(list)
     expect(restart).toBeGreaterThan(persist)
+    expect(main).not.toContain('persistProfileSelection')
+  })
+
+  it('constructs every local HTML window through the shared security policy', () => {
+    for (const filename of [
+      'desktop-dialog-window.ts',
+      'profile-create-window.ts',
+      'profile-selection-window.ts',
+      'setup-wizard-window.ts',
+      'startup-recovery-window.ts',
+    ]) {
+      const source = readFileSync(new URL(`src/${filename}`, packageRoot), 'utf8')
+      expect(source, filename).toContain('createDesktopLocalWindow({')
+      expect(source, filename).not.toContain('new BrowserWindow({')
+    }
   })
 
   it('wires local crash evidence before Electron becomes ready', () => {

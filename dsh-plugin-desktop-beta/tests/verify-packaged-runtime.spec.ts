@@ -7,8 +7,10 @@ import {
   REQUIRED_DSH_CLI_RUNTIME_ENTRIES,
   REQUIRED_PACKAGED_RUNTIME_ENTRIES,
   REQUIRED_MACOS_UNIVERSAL_ENTRIES,
+  REQUIRED_POSIX_FS_EXT_ENTRIES,
   REQUIRED_UNPACKED_PACKAGE_SPECIFIERS,
   REQUIRED_UNPACKED_RUNTIME_ENTRIES,
+  REQUIRED_WINDOWS_X64_FS_EXT_ENTRIES,
   REQUIRED_WINDOWS_X64_NODE_PTY_ENTRIES,
   resolvePackagedAsarPath,
   resolvePackagedUnpackedRoot,
@@ -120,6 +122,29 @@ describe('packaged desktop runtime verification', () => {
     ])
   })
 
+  it('tracks the Electron 43 fs-ext binding shipped for Windows x64', () => {
+    expect(REQUIRED_WINDOWS_X64_FS_EXT_ENTRIES).toEqual([
+      'node_modules/fs-ext/prebuilds/win32-x64/electron.abi148.node',
+    ])
+  })
+
+  it.each([
+    ['darwin', 1, REQUIRED_POSIX_FS_EXT_ENTRIES.darwin.x64],
+    ['darwin', 3, REQUIRED_POSIX_FS_EXT_ENTRIES.darwin.arm64],
+    ['linux', 1, REQUIRED_POSIX_FS_EXT_ENTRIES.linux.x64],
+    ['linux', 3, REQUIRED_POSIX_FS_EXT_ENTRIES.linux.arm64],
+  ] as const)('requires the Electron 43 fs-ext binding for %s arch %s', (platform, arch, missing) => {
+    const runtimeContext = context('/build', platform, arch)
+    const unpackedRoot = resolvePackagedUnpackedRoot(runtimeContext)
+
+    expect(() => verifyPackagedRuntime(
+      runtimeContext,
+      () => completeArchiveEntries(),
+      filename => filename !== join(unpackedRoot, missing),
+      completePackageResolver(unpackedRoot),
+    )).toThrow(`missing required physical entries: ${missing}`)
+  })
+
   it.each([
     [
       'darwin',
@@ -144,7 +169,9 @@ describe('packaged desktop runtime verification', () => {
     expect(resolvePackagedUnpackedRoot(context('/build', platform))).toBe(unpackedRoot)
     expect(exists).toHaveBeenCalledTimes(
       REQUIRED_UNPACKED_RUNTIME_ENTRIES.length
-        + (platform === 'win32' ? REQUIRED_WINDOWS_X64_NODE_PTY_ENTRIES.length : 0)
+        + (platform === 'win32'
+          ? REQUIRED_WINDOWS_X64_NODE_PTY_ENTRIES.length + REQUIRED_WINDOWS_X64_FS_EXT_ENTRIES.length
+          : 0)
         + completeArchiveEntries().length,
     )
     expect(resolvePackage.mock.calls.map(([specifier]) => specifier))
@@ -195,20 +222,22 @@ describe('packaged desktop runtime verification', () => {
     )).toThrow(`missing ASAR-declared physical entries: ${missing}`)
   })
 
-  it('rejects a host-architecture node-pty build from a universal app', () => {
-    const runtimeContext = context('/build', 'darwin', 4)
-    const unpackedRoot = resolvePackagedUnpackedRoot(runtimeContext)
-    const forbidden = FORBIDDEN_MACOS_UNIVERSAL_ENTRIES[0]
+  it.each(FORBIDDEN_MACOS_UNIVERSAL_ENTRIES)(
+    'rejects host-architecture native build output %s from a universal app',
+    (forbidden) => {
+      const runtimeContext = context('/build', 'darwin', 4)
+      const unpackedRoot = resolvePackagedUnpackedRoot(runtimeContext)
 
-    expect(() => verifyPackagedRuntime(
-      runtimeContext,
-      () => completeArchiveEntries(),
-      filename => filename === join(unpackedRoot, forbidden)
-        || !FORBIDDEN_MACOS_UNIVERSAL_ENTRIES
-          .some(entry => filename === join(unpackedRoot, entry)),
-      completePackageResolver(unpackedRoot),
-    )).toThrow(`contains host-architecture build output: ${forbidden}`)
-  })
+      expect(() => verifyPackagedRuntime(
+        runtimeContext,
+        () => completeArchiveEntries(),
+        filename => filename === join(unpackedRoot, forbidden)
+          || !FORBIDDEN_MACOS_UNIVERSAL_ENTRIES
+            .some(entry => filename === join(unpackedRoot, entry)),
+        completePackageResolver(unpackedRoot),
+      )).toThrow(`contains host-architecture build output: ${forbidden}`)
+    },
+  )
 
   it.each([
     'lib/client.js',
@@ -239,6 +268,10 @@ describe('packaged desktop runtime verification', () => {
     'node_modules/@deepseek-ai/dsh/lib/bin.js',
     'node_modules/@deepseek-ai/dsh/lib/plugin-F7ZVfRyo.js',
     'node_modules/@deepseek-ai/dsh-subprocess-local/lib/index.js',
+    'node_modules/fs-ext/fs-ext.js',
+    'node_modules/fs-ext/LICENSE.txt',
+    'node_modules/fs-ext/package.json',
+    'node_modules/fs-ext/prebuilds/win32-x64/electron.abi148.node',
     'node_modules/open/index.js',
     'node_modules/pnpm/bin/pnpm.mjs',
     'node_modules/node-pty/prebuilds/win32-x64/conpty.node',

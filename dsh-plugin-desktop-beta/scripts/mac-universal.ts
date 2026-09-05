@@ -25,6 +25,10 @@ export const MACOS_UNIVERSAL_NATIVE_ENTRIES = [
   },
   {
     arch: 'arm64',
+    path: 'node_modules/fs-ext/prebuilds/darwin-arm64/electron.abi148.node',
+  },
+  {
+    arch: 'arm64',
     path: 'node_modules/node-addon-require-builtin-darwin-arm64/prebuilt/darwin-arm64-napi-v9.node',
   },
   {
@@ -53,6 +57,10 @@ export const MACOS_UNIVERSAL_NATIVE_ENTRIES = [
   },
   {
     arch: 'x86_64',
+    path: 'node_modules/fs-ext/prebuilds/darwin-x64/electron.abi148.node',
+  },
+  {
+    arch: 'x86_64',
     path: 'node_modules/node-addon-require-builtin-darwin-x64/prebuilt/darwin-x64-napi-v9.node',
   },
   {
@@ -67,6 +75,7 @@ export const MACOS_UNIVERSAL_NATIVE_ENTRIES = [
 
 /** Generated host-architecture files that must never shadow the prebuilt pair. */
 export const FORBIDDEN_MACOS_UNIVERSAL_ENTRIES = [
+  'node_modules/fs-ext/build/Release/fs_ext.node',
   'node_modules/node-pty/build/Release/pty.node',
   'node_modules/node-pty/build/Release/spawn-helper',
 ] as const

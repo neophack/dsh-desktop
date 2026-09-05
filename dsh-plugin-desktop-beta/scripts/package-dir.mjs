@@ -2,18 +2,24 @@
 
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { dirname } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { electronBuilderEnvironment } from './electron-builder-environment.ts'
 
 const require = createRequire(import.meta.url)
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const builderCli = require.resolve('electron-builder/cli.js')
-const result = spawnSync(process.execPath, [builderCli, '--dir'], {
+const electronDist = resolve(dirname(require.resolve('electron/package.json')), 'dist')
+const result = spawnSync(process.execPath, [
+  builderCli,
+  '--dir',
+  `--config.electronDist=${electronDist}`,
+], {
   cwd: packageRoot,
-  env: {
+  env: electronBuilderEnvironment({
     ...process.env,
     CSC_IDENTITY_AUTO_DISCOVERY: 'false',
-  },
+  }),
   stdio: 'inherit',
 })
 

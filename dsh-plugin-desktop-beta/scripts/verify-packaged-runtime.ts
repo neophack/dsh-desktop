@@ -103,6 +103,9 @@ export const REQUIRED_UNPACKED_RUNTIME_ENTRIES = [
   'node_modules/@deepseek-ai/dsh-subprocess-local/lib/index.js',
   'node_modules/@deepseek-ai/dsh-app-boot/lib/index.js',
   'node_modules/@deepseek-ai/dsh-web-frontend/dist/index.html',
+  'node_modules/fs-ext/fs-ext.js',
+  'node_modules/fs-ext/LICENSE.txt',
+  'node_modules/fs-ext/package.json',
   'node_modules/open/index.js',
   'node_modules/pnpm/bin/pnpm.mjs',
 ] as const
@@ -114,6 +117,23 @@ export const REQUIRED_WINDOWS_X64_NODE_PTY_ENTRIES = [
   'node_modules/node-pty/prebuilds/win32-x64/conpty/OpenConsole.exe',
   'node_modules/node-pty/prebuilds/win32-x64/conpty/conpty.dll',
 ] as const
+
+/** ABI-pinned fs-ext binding required by Electron 43 on Windows x64. */
+export const REQUIRED_WINDOWS_X64_FS_EXT_ENTRIES = [
+  'node_modules/fs-ext/prebuilds/win32-x64/electron.abi148.node',
+] as const
+
+/** ABI-pinned fs-ext bindings selected by non-universal macOS and Linux packages. */
+export const REQUIRED_POSIX_FS_EXT_ENTRIES = {
+  darwin: {
+    x64: 'node_modules/fs-ext/prebuilds/darwin-x64/electron.abi148.node',
+    arm64: 'node_modules/fs-ext/prebuilds/darwin-arm64/electron.abi148.node',
+  },
+  linux: {
+    x64: 'node_modules/fs-ext/prebuilds/linux-x64/electron.abi148.node',
+    arm64: 'node_modules/fs-ext/prebuilds/linux-arm64/electron.abi148.node',
+  },
+} as const
 
 /** CPU-specific runtime assets that must coexist in a universal macOS application. */
 export const REQUIRED_MACOS_UNIVERSAL_ENTRIES = [
@@ -385,11 +405,25 @@ export function verifyPackagedRuntime(
 ): void {
   const archiveEntries = verifyPackagedAsar(resolvePackagedAsarPath(context), list)
   const unpackedRoot = resolvePackagedUnpackedRoot(context)
+  const posixFsExtEntry = context.electronPlatformName === 'darwin'
+    || context.electronPlatformName === 'linux'
+    ? context.arch === 1
+      ? REQUIRED_POSIX_FS_EXT_ENTRIES[context.electronPlatformName].x64
+      : context.arch === 3
+        ? REQUIRED_POSIX_FS_EXT_ENTRIES[context.electronPlatformName].arm64
+        : undefined
+    : undefined
   const requiredPhysicalEntries = context.electronPlatformName === 'win32'
-    ? [...REQUIRED_UNPACKED_RUNTIME_ENTRIES, ...REQUIRED_WINDOWS_X64_NODE_PTY_ENTRIES]
+    ? [
+        ...REQUIRED_UNPACKED_RUNTIME_ENTRIES,
+        ...REQUIRED_WINDOWS_X64_NODE_PTY_ENTRIES,
+        ...REQUIRED_WINDOWS_X64_FS_EXT_ENTRIES,
+      ]
     : context.electronPlatformName === 'darwin' && context.arch === 4
       ? [...REQUIRED_UNPACKED_RUNTIME_ENTRIES, ...REQUIRED_MACOS_UNIVERSAL_ENTRIES]
-      : REQUIRED_UNPACKED_RUNTIME_ENTRIES
+      : posixFsExtEntry === undefined
+        ? REQUIRED_UNPACKED_RUNTIME_ENTRIES
+        : [...REQUIRED_UNPACKED_RUNTIME_ENTRIES, posixFsExtEntry]
   const missing = requiredPhysicalEntries.filter(entry => !exists(join(unpackedRoot, entry)))
   if (missing.length > 0) {
     throw new Error(

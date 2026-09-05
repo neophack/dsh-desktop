@@ -6,7 +6,7 @@ import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import { apply } from '../src/client/index.ts'
 import { AdvancedFrame, type AdvancedFrameProps } from '../src/client/AdvancedFrame.tsx'
 import { applyAdvancedShell } from '../src/client/advanced-shell.ts'
-import { claimDesktopLayout } from '../src/client/layout-service.ts'
+import { installDesktopLayout } from '../src/client/layout-service.ts'
 import { parseDesktopClientEnvironment } from '../src/client/environment.ts'
 import { ExtendedFrame } from '../src/client/ExtendedFrame.tsx'
 import { applyExtendedShell, applyFramedShell } from '../src/client/extended-shell.ts'
@@ -176,6 +176,7 @@ describe('advanced desktop layout', () => {
     let uninstall: unknown
     const ctx = {
       reflect: {
+        get: () => undefined,
         provide: (name: string, value: unknown) => {
           expect(name).toBe('layout')
           expect(value).toBeInstanceOf(DesktopLayoutState)
@@ -187,7 +188,7 @@ describe('advanced desktop layout', () => {
       effect: (factory: () => unknown) => { uninstall = factory() },
     } as unknown as ClientContext
 
-    expect(claimDesktopLayout(ctx, new DesktopLayoutState())).toBe(true)
+    installDesktopLayout(ctx, new DesktopLayoutState())
     expect(disposed).toBe(false)
     expect(typeof uninstall).toBe('function')
     ;(uninstall as () => void)()
@@ -224,7 +225,7 @@ describe('advanced desktop layout', () => {
         const dispose = mount()
         if (typeof dispose === 'function') disposers.push(dispose)
       }),
-      reflect: { provide: vi.fn(() => () => {}) },
+      reflect: { get: vi.fn(), provide: vi.fn(() => () => {}) },
       theme: {
         getTheme: vi.fn(() => ({ active: { colorScheme: 'dark', tokens: {} } })),
       },
@@ -471,7 +472,7 @@ describe('independent Desktop frame', () => {
         const dispose = mount()
         if (typeof dispose === 'function') disposers.push(dispose)
       }),
-      reflect: { provide: vi.fn(() => () => {}) },
+      reflect: { get: vi.fn(), provide: vi.fn(() => () => {}) },
       theme: {
         getTheme: vi.fn(() => ({ active: { colorScheme: 'dark', tokens: {} } })),
       },

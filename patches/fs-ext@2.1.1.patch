@@ -1,0 +1,25 @@
+diff --git a/fs-ext.js b/fs-ext.js
+--- a/fs-ext.js
++++ b/fs-ext.js
+@@ -19,7 +19,17 @@
+-
++
+ "use strict";
+-
++
+-var binding = require('./build/Release/fs_ext.node');
++var bindingPath = './build/Release/fs_ext.node';
++
++if (process.versions.electron) {
++  if (!process.versions.modules) {
++    throw new Error('fs-ext cannot determine the Electron native module ABI');
++  }
++  bindingPath = './prebuilds/' + process.platform + '-' + process.arch
++    + '/electron.abi' + process.versions.modules + '.node';
++}
++
++var binding = require(bindingPath);
+-
++
+ // Used by flock
+ function stringToFlockFlags(flag) {
