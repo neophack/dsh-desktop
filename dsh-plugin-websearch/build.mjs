@@ -14,27 +14,38 @@
  * body is wrapped into the loader factory shape with plain fs concatenation.
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const root = dirname(fileURLToPath(import.meta.url))
 const out = (path) => join(root, path)
+const require = createRequire(import.meta.url)
 
-/** Locate the platform esbuild binary: package-local first, then the repo root. */
+// Package + in-package subpath for each platform, matching esbuild's own
+// lib/main.js pkgAndSubpathForCurrentPlatform() exactly (the Windows package
+// ships its exe at its root; every other platform nests it under bin/).
+const ESBUILD_PLATFORM_SUBPATHS = {
+  'win32-x64': 'esbuild.exe',
+  'win32-arm64': 'esbuild.exe',
+  'win32-ia32': 'esbuild.exe',
+  'linux-x64': 'bin/esbuild',
+  'linux-arm64': 'bin/esbuild',
+  'darwin-x64': 'bin/esbuild',
+  'darwin-arm64': 'bin/esbuild',
+}
+
+/** Locate the platform esbuild binary via Node's own module resolution. */
 function esbuildBinary() {
-  const candidates = [
-    join(root, 'node_modules', '@esbuild', 'win32-x64', 'esbuild.exe'),
-    join(root, 'node_modules', '@esbuild', 'linux-x64', 'esbuild'),
-    join(root, 'node_modules', '@esbuild', 'darwin-arm64', 'esbuild'),
-    join(root, 'node_modules', '@esbuild', 'darwin-x64', 'esbuild'),
-    join(root, '..', 'node_modules', '@esbuild', 'win32-x64', 'esbuild.exe'),
-    join(root, '..', 'node_modules', '@esbuild', 'linux-x64', 'esbuild'),
-    join(root, '..', 'node_modules', '@esbuild', 'darwin-arm64', 'esbuild'),
-    join(root, '..', 'node_modules', '@esbuild', 'darwin-x64', 'esbuild'),
-  ]
-  for (const candidate of candidates) if (existsSync(candidate)) return candidate
-  throw new Error('esbuild platform binary not found — run `npm install` or `corepack yarn install` first')
+  const platformKey = `${process.platform}-${process.arch}`
+  const subpath = ESBUILD_PLATFORM_SUBPATHS[platformKey]
+  if (subpath === undefined) throw new Error(`esbuild platform binary not supported for ${platformKey}`)
+  try {
+    return require.resolve(`@esbuild/${platformKey}/${subpath}`)
+  } catch (cause) {
+    throw new Error('esbuild platform binary not found — run `npm install` or `corepack yarn install` first', { cause })
+  }
 }
 
 const bin = esbuildBinary()
