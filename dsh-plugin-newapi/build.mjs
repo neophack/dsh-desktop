@@ -20,16 +20,20 @@ import { existsSync } from 'node:fs'
 const root = dirname(fileURLToPath(import.meta.url))
 const out = (path) => join(root, path)
 
-/** Locate the platform esbuild binary inside this package's node_modules. */
+/** Locate the platform esbuild binary: package-local first, then the repo root. */
 function esbuildBinary() {
   const candidates = [
     join(root, 'node_modules', '@esbuild', 'win32-x64', 'esbuild.exe'),
     join(root, 'node_modules', '@esbuild', 'linux-x64', 'esbuild'),
     join(root, 'node_modules', '@esbuild', 'darwin-arm64', 'esbuild'),
     join(root, 'node_modules', '@esbuild', 'darwin-x64', 'esbuild'),
+    join(root, '..', 'node_modules', '@esbuild', 'win32-x64', 'esbuild.exe'),
+    join(root, '..', 'node_modules', '@esbuild', 'linux-x64', 'esbuild'),
+    join(root, '..', 'node_modules', '@esbuild', 'darwin-arm64', 'esbuild'),
+    join(root, '..', 'node_modules', '@esbuild', 'darwin-x64', 'esbuild'),
   ]
   for (const candidate of candidates) if (existsSync(candidate)) return candidate
-  throw new Error('esbuild platform binary not found — run `npm install` first')
+  throw new Error('esbuild platform binary not found — run `npm install` or `corepack yarn install` first')
 }
 
 const bin = esbuildBinary()
